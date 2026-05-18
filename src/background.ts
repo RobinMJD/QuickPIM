@@ -374,11 +374,14 @@ async function getDirectoryRoles(graphToken: string): Promise<ActivationItem[]> 
     graphApiUrl(`/v1.0/roleManagement/directory/roleEligibilitySchedules?${query.toString()}`),
     graphToken
   );
-  const definitions = await getDirectoryRoleDefinitionsBestEffort(graphToken);
-  const policyRequirements = await getDirectoryRolePolicyRequirementsBestEffort(graphToken);
+  const [definitions, scopeNames, policyRequirements] = await Promise.all([
+    getDirectoryRoleDefinitionsBestEffort(graphToken),
+    getDirectoryScopeNamesBestEffort(graphToken, roles),
+    getDirectoryRolePolicyRequirementsBestEffort(graphToken)
+  ]);
 
   return roles.map((role) => {
-    const namedRole = withDirectoryRoleDefinitionName(role, definitions);
+    const namedRole = withDirectoryRoleScopeName(withDirectoryRoleDefinitionName(role, definitions), scopeNames);
     const item = normalizeDirectoryRole(namedRole);
     return applyActivationRequirements(
       item,
@@ -439,6 +442,88 @@ function withDirectoryRoleDefinitionName(role: DirectoryRoleApi, definitions: Re
       definitions[role.roleDefinition?.id || ""] ||
       definitions[role.roleDefinition?.templateId || ""]
   };
+}
+
+async function getDirectoryScopeNamesBestEffort(
+  graphToken: string,
+  roles: Array<Pick<DirectoryRoleApi, "directoryScopeId">>
+): Promise<Record<string, string>> {
+  const scopeIds = [
+    ...new Set(
+      roles
+        .map((role) => role.directoryScopeId || "/")
+        .filter((scopeId) => scopeId && scopeId !== "/")
+    )
+  ];
+  if (!scopeIds.length) {
+    return {};
+  }
+
+  const entries = await mapWithConcurrency(scopeIds, 6, async (scopeId) => {
+    const displayName = await fetchDirectoryScopeDisplayName(graphToken, scopeId);
+    return displayName ? ([scopeId, displayName] as const) : undefined;
+  });
+  return Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry)));
+}
+
+async function fetchDirectoryScopeDisplayName(graphToken: string, directoryScopeId: string): Promise<string | undefined> {
+  const objectId = extractDirectoryScopeObjectId(directoryScopeId);
+  if (!objectId) {
+    return undefined;
+  }
+
+  for (const url of getDirectoryScopeLookupUrls(directoryScopeId, objectId)) {
+    try {
+      const data = await fetchJson<{ displayName?: string; userPrincipalName?: string }>(url, graphToken);
+      const displayName = data.displayName || data.userPrincipalName;
+      if (displayName) {
+        return displayName;
+      }
+    } catch {
+      // Keep trying narrower fallback endpoints because scope IDs can be typed or raw object paths.
+    }
+  }
+  return undefined;
+}
+
+function getDirectoryScopeLookupUrls(directoryScopeId: string, objectId: string): string[] {
+  const normalized = directoryScopeId.toLowerCase();
+  const encodedId = encodePathSegment(objectId);
+
+  if (normalized.startsWith("/administrativeunits/")) {
+    return [graphApiUrl(`/v1.0/directory/administrativeUnits/${encodedId}?$select=id,displayName`)];
+  }
+
+  if (normalized.startsWith("/devices/")) {
+    return [graphApiUrl(`/v1.0/devices/${encodedId}?$select=id,displayName`)];
+  }
+
+  if (normalized.startsWith("/groups/")) {
+    return [graphApiUrl(`/v1.0/groups/${encodedId}?$select=id,displayName`)];
+  }
+
+  if (normalized.startsWith("/users/")) {
+    return [graphApiUrl(`/v1.0/users/${encodedId}?$select=id,displayName,userPrincipalName`)];
+  }
+
+  return [
+    graphApiUrl(`/v1.0/directoryObjects/${encodedId}?$select=id,displayName`),
+    graphApiUrl(`/v1.0/directory/administrativeUnits/${encodedId}?$select=id,displayName`),
+    graphApiUrl(`/v1.0/devices/${encodedId}?$select=id,displayName`),
+    graphApiUrl(`/v1.0/groups/${encodedId}?$select=id,displayName`),
+    graphApiUrl(`/v1.0/users/${encodedId}?$select=id,displayName,userPrincipalName`)
+  ];
+}
+
+function extractDirectoryScopeObjectId(directoryScopeId: string): string | undefined {
+  const parts = directoryScopeId.split("/").filter(Boolean);
+  return parts.at(-1);
+}
+
+function withDirectoryRoleScopeName(role: DirectoryRoleApi, scopeNames: Record<string, string>): DirectoryRoleApi {
+  const directoryScopeId = role.directoryScopeId || "/";
+  const scopeName = role.directoryScope?.displayName || scopeNames[directoryScopeId];
+  return scopeName ? { ...role, directoryScopeDisplayName: scopeName } : role;
 }
 
 async function getPimGroups(graphToken: string): Promise<ActivationItem[]> {
@@ -585,7 +670,10 @@ async function getActiveDirectoryRoles(graphToken: string): Promise<ActivationIt
     graphApiUrl("/v1.0/roleManagement/directory/roleAssignmentScheduleRequests/filterByCurrentUser(on='principal')"),
     graphToken
   );
-  const definitions = await getDirectoryRoleDefinitionsBestEffort(graphToken);
+  const [definitions, scopeNames] = await Promise.all([
+    getDirectoryRoleDefinitionsBestEffort(graphToken),
+    getDirectoryScopeNamesBestEffort(graphToken, roles)
+  ]);
   const now = Date.now();
 
   return roles
@@ -598,7 +686,7 @@ async function getActiveDirectoryRoles(graphToken: string): Promise<ActivationIt
     })
     .filter(({ endTime }) => !endTime || endTime > now)
     .map(({ role }) => ({
-      ...normalizeDirectoryRole(withDirectoryRoleDefinitionName(role, definitions)),
+      ...normalizeDirectoryRole(withDirectoryRoleScopeName(withDirectoryRoleDefinitionName(role, definitions), scopeNames)),
       status: "active" as const
     }));
 }

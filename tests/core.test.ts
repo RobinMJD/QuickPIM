@@ -55,6 +55,21 @@ describe("PIM item normalization", () => {
     });
   });
 
+  test("normalizes directory role scope display names when available", () => {
+    const item = normalizeDirectoryRole({
+      roleDefinitionId: "groups-admin",
+      principalId: "user-1",
+      directoryScopeId: "/administrativeUnits/au-1",
+      directoryScopeDisplayName: "Paris Devices",
+      roleName: "Groups Administrator"
+    });
+
+    expect(item).toMatchObject({
+      id: "directoryRole:groups-admin:/administrativeUnits/au-1",
+      scopeLabel: "Paris Devices"
+    });
+  });
+
   test("normalizes Azure roles with expanded display names and eligibility schedule ids", () => {
     const item = normalizeAzureRole({
       id: "/subscriptions/sub-1/providers/Microsoft.Authorization/RoleEligibilityScheduleInstances/elig-1",

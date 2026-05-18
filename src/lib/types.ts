@@ -179,6 +179,11 @@ export interface DirectoryRoleApi {
   principalId?: string;
   directoryScopeId?: string;
   roleName?: string;
+  directoryScopeDisplayName?: string;
+  directoryScope?: {
+    id?: string;
+    displayName?: string;
+  };
   roleDefinitionDisplayName?: string;
   roleDefinition?: {
     id?: string;

@@ -87,6 +87,7 @@ export function normalizeDirectoryRole(role: DirectoryRoleApi): DirectoryRoleIte
   const roleDefinitionId = role.roleDefinitionId || role.id || "unknown-role";
   const directoryScopeId = role.directoryScopeId || "/";
   const roleName = role.roleDefinition?.displayName || role.roleName || role.roleDefinitionDisplayName || roleDefinitionId;
+  const scopeName = role.directoryScopeDisplayName || role.directoryScope?.displayName;
 
   return {
     id: `directoryRole:${roleDefinitionId}:${directoryScopeId}`,
@@ -96,7 +97,7 @@ export function normalizeDirectoryRole(role: DirectoryRoleApi): DirectoryRoleIte
     principalId: role.principalId || "",
     roleDefinitionId,
     directoryScopeId,
-    scopeLabel: directoryScopeId === "/" ? "Tenant" : directoryScopeId,
+    scopeLabel: directoryScopeId === "/" ? "Tenant" : scopeName || directoryScopeId,
     status: "eligible",
     activationRequirements: {
       justification: true,

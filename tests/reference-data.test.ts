@@ -5,7 +5,7 @@ import {
   learnReferenceDataFromItems,
   mergeReferenceData
 } from "../src/lib/referenceData";
-import { DEFAULT_SETTINGS, getDisplayName, mergeSettings } from "../src/lib/settings";
+import { DEFAULT_SETTINGS, getDisplayName, getScopeLabel, mergeSettings } from "../src/lib/settings";
 import type { ActivationItem } from "../src/lib/types";
 
 const rawDirectoryRole: ActivationItem = {
@@ -65,6 +65,26 @@ describe("reference data cache", () => {
     expect(imported.directoryRoleDefinitions.reader.name).toHaveLength(120);
     expect(imported.directoryRoleDefinitions).not.toHaveProperty("bad-key".repeat(80));
     expect(Object.keys(imported.pimGroups)).toHaveLength(300);
+  });
+
+  test("learns and reapplies directory scope names for admin units and devices", () => {
+    const scopedRole: ActivationItem = {
+      ...rawDirectoryRole,
+      id: "directoryRole:reader:/administrativeUnits/au-1",
+      directoryScopeId: "/administrativeUnits/au-1",
+      scopeLabel: "Paris Devices"
+    };
+    const rawScopedRole: ActivationItem = {
+      ...scopedRole,
+      scopeLabel: "/administrativeUnits/au-1"
+    };
+
+    const learned = learnReferenceDataFromItems(DEFAULT_REFERENCE_DATA, [scopedRole]);
+
+    expect(getScopeLabel(rawScopedRole, learned)).toBe("Paris Devices");
+    expect(applyReferenceDataToItems([rawScopedRole], learned)[0]).toMatchObject({
+      scopeLabel: "Paris Devices"
+    });
   });
 
   test("keeps old settings import sanitization independent from reference data", () => {
