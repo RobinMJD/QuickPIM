@@ -24,7 +24,8 @@ describe("versioning and extension manifest", () => {
       {
         matches: ["https://entra.microsoft.com/*"],
         js: ["portalTokenCollector.js"],
-        run_at: "document_idle"
+        run_at: "document_idle",
+        all_frames: true
       }
     ]);
     expect(manifest.content_security_policy?.extension_pages).toContain("script-src 'self'");

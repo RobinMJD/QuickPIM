@@ -12,6 +12,13 @@ export const ENTRA_PORTAL_URLS: Record<RoleTab, string> = {
     "https://entra.microsoft.com/?feature.msaljs=true#view/Microsoft_Azure_PIMCommon/ActivationMenuBlade/~/azurerbac/provider/azurerbac"
 };
 
+export const ENTRA_GRAPH_BOOTSTRAP_URLS: Record<Exclude<RoleTab, "azureRole">, string> = {
+  directoryRole:
+    "https://entra.microsoft.com/?feature.msaljs=true#view/Microsoft_AAD_UsersAndTenants/UserManagementMenuBlade/~/AllUsers",
+  pimGroup:
+    "https://entra.microsoft.com/?feature.msaljs=true#view/Microsoft_AAD_IAM/GroupsManagementMenuBlade/~/AllGroups"
+};
+
 export function getPortalUrlForTab(tab: PopupTab): string | undefined {
   if (tab === "directoryRole" || tab === "pimGroup" || tab === "azureRole") {
     return ENTRA_PORTAL_URLS[tab];

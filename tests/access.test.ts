@@ -4,7 +4,7 @@ import {
   getAccessSetupTargets,
   getPortalUrlsForTargets
 } from "../src/lib/access";
-import { ENTRA_PORTAL_URLS } from "../src/lib/popupModel";
+import { ENTRA_GRAPH_BOOTSTRAP_URLS, ENTRA_PORTAL_URLS } from "../src/lib/popupModel";
 import type { QuickPimDataCache, TokenStatus } from "../src/lib/types";
 
 const missingTokens: TokenStatus = {
@@ -33,6 +33,7 @@ describe("portal-driven access setup", () => {
     expect(getAccessSetupTargets(items)).toEqual(["directoryRole", "pimGroup", "azureRole"]);
     expect(getPortalUrlsForTargets(["directoryRole", "azureRole"])).toEqual([
       ENTRA_PORTAL_URLS.directoryRole,
+      ENTRA_GRAPH_BOOTSTRAP_URLS.directoryRole,
       ENTRA_PORTAL_URLS.azureRole
     ]);
   });

@@ -1,4 +1,4 @@
-import { ENTRA_PORTAL_URLS } from "./popupModel";
+import { ENTRA_GRAPH_BOOTSTRAP_URLS, ENTRA_PORTAL_URLS } from "./popupModel";
 import type {
   AccessCapabilityStatus,
   AccessDiagnostic,
@@ -55,7 +55,16 @@ export function getAccessSetupTargets(items: AccessCapabilityItem[]): AccessSetu
 }
 
 export function getPortalUrlsForTargets(targets: AccessSetupTarget[]): string[] {
-  return [...new Set(targets.map((target) => ENTRA_PORTAL_URLS[target]))];
+  return [
+    ...new Set(
+      targets.flatMap((target) => {
+        if (target === "directoryRole" || target === "pimGroup") {
+          return [ENTRA_PORTAL_URLS[target], ENTRA_GRAPH_BOOTSTRAP_URLS[target]];
+        }
+        return [ENTRA_PORTAL_URLS[target]];
+      })
+    )
+  ];
 }
 
 export function buildTokenCacheKey(tokenStatus: TokenStatus | null | undefined): string {

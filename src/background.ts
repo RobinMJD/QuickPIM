@@ -123,7 +123,7 @@ async function capturePortalTokens(
   source: string | undefined,
   sender: chrome.runtime.MessageSender
 ): Promise<{ captured: TokenKind[] }> {
-  const sourceUrl = sender.url || sender.tab?.url;
+  const sourceUrl = sender.url || sender.tab?.url || sender.origin;
   if (!isAllowedPortalTokenSource(sourceUrl)) {
     throw new Error("Portal token capture is only allowed from Microsoft Entra pages.");
   }

@@ -132,7 +132,12 @@ function SettingsApp() {
       setDataCache(nextCache);
       setReferenceData(nextReferenceData);
       setItems(applyDisplayData(eligible.items, settings, nextReferenceData));
-      setMessage("Access data refreshed.");
+      const limitedAreas = buildAccessCapabilityItems(latestTokens, nextCache).filter((item) => item.status !== "ready").length;
+      setMessage(
+        limitedAreas
+          ? `Access data refreshed. ${limitedAreas} area(s) still need portal access or are limited by the captured portal token.`
+          : "Access data refreshed."
+      );
     } catch (refreshError) {
       setMessage("");
       setError(refreshError instanceof Error ? refreshError.message : String(refreshError));

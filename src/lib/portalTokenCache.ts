@@ -4,8 +4,12 @@ const MAX_TOKENS = 20;
 const MAX_JSON_DEPTH = 5;
 
 export function collectPortalTokensFromEntries(entries: Array<[string, string | null | undefined]>): string[] {
+  return collectPortalTokensFromValues(entries.map(([, value]) => value));
+}
+
+export function collectPortalTokensFromValues(values: unknown[]): string[] {
   const tokens = new Set<string>();
-  for (const [, value] of entries) {
+  for (const value of values) {
     addTokensFromValue(value, tokens);
     if (tokens.size >= MAX_TOKENS) {
       break;

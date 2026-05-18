@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { collectPortalTokensFromEntries } from "../src/lib/portalTokenCache";
+import { collectPortalTokensFromEntries, collectPortalTokensFromValues } from "../src/lib/portalTokenCache";
 
 describe("portal token cache collection", () => {
   test("extracts bounded JWT access tokens from MSAL local and session storage entries", () => {
@@ -16,6 +16,23 @@ describe("portal token cache collection", () => {
     ]);
 
     expect(tokens).toEqual([graphToken, azureToken, idToken]);
+  });
+
+  test("extracts tokens from nested IndexedDB-style records", () => {
+    const graphToken = makeToken({ aud: "https://graph.microsoft.com/" });
+    const azureToken = makeToken({ aud: "https://management.azure.com/" });
+
+    const tokens = collectPortalTokensFromValues([
+      {
+        credential: {
+          credentialType: "AccessToken",
+          secret: graphToken
+        }
+      },
+      [{ cached: { accessToken: azureToken } }]
+    ]);
+
+    expect(tokens).toEqual([graphToken, azureToken]);
   });
 });
 

@@ -29,7 +29,7 @@ describe("security allowlists and token validation", () => {
 
   test("rejects captured tokens with wrong audience, invalid format, or expired claims", () => {
     const graphToken = makeToken({
-      aud: "https://graph.microsoft.com",
+      aud: "https://graph.microsoft.com/",
       exp: Math.floor((now + 10 * 60_000) / 1000),
       oid: "user-1"
     });

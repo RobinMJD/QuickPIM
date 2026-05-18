@@ -7,7 +7,11 @@ const API_HOSTS: Record<TokenKind, string> = {
 };
 const PORTAL_TOKEN_HOSTS = new Set(["entra.microsoft.com"]);
 
-const GRAPH_AUDIENCES = new Set(["https://graph.microsoft.com", "00000003-0000-0000-c000-000000000000"]);
+const GRAPH_AUDIENCES = new Set([
+  "https://graph.microsoft.com",
+  "https://graph.microsoft.com/",
+  "00000003-0000-0000-c000-000000000000"
+]);
 const AZURE_MANAGEMENT_AUDIENCES = new Set([
   "https://management.azure.com",
   "https://management.azure.com/",
