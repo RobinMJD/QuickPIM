@@ -22,6 +22,11 @@ import {
   type RoleTab
 } from "../lib/popupModel";
 import {
+  buildPermissionStatus,
+  getMissingPermissionItems,
+  shouldShowPermissionWarning
+} from "../lib/permissions";
+import {
   DEFAULT_SETTINGS,
   addRecentJustification,
   addSavedJustification,
@@ -83,6 +88,12 @@ function PopupApp() {
   );
   const requirements = useMemo(() => getActivationRequirements(selectedItems), [selectedItems]);
   const durationOptions = useMemo(() => getDurationOptions(selectedItems), [selectedItems]);
+  const permissionStatus = useMemo(() => buildPermissionStatus(tokenStatus), [tokenStatus]);
+  const missingPermissions = useMemo(() => getMissingPermissionItems(permissionStatus), [permissionStatus]);
+  const showPermissionWarning = useMemo(
+    () => tokenStatus !== null && shouldShowPermissionWarning(permissionStatus, settings),
+    [permissionStatus, settings, tokenStatus]
+  );
 
   useEffect(() => {
     if (durationOptions.length) {
@@ -235,6 +246,28 @@ function PopupApp() {
     }
   }
 
+  function openPermissionDetails() {
+    const url = chrome.runtime.getURL("settings.html#permissions");
+    if (chrome.tabs?.create) {
+      void chrome.tabs.create({ url });
+    } else {
+      window.open(url, "_blank", "noopener");
+    }
+  }
+
+  async function ignorePermissionWarning() {
+    const updated = {
+      ...settings,
+      preferences: {
+        ...settings.preferences,
+        permissionWarningIgnored: true,
+        permissionWarningIgnoredAt: new Date().toISOString()
+      }
+    };
+    await saveSettings(updated);
+    setSettings(updated);
+  }
+
   const roleTabs: RoleTab[] = ["directoryRole", "pimGroup", "azureRole"];
   const portalUrl = getPortalUrlForTab(tab);
 
@@ -262,6 +295,14 @@ function PopupApp() {
           <TokenPill label="Azure" status={tokenStatus?.azureManagement} />
         </div>
       </header>
+
+      {showPermissionWarning ? (
+        <PermissionWarningBanner
+          missingCount={missingPermissions.length}
+          onDetails={openPermissionDetails}
+          onIgnore={() => void ignorePermissionWarning()}
+        />
+      ) : null}
 
       <nav className="tab-bar">
         {roleTabs.map((roleTab) => (
@@ -367,6 +408,33 @@ function PopupApp() {
         </section>
       ) : null}
     </main>
+  );
+}
+
+function PermissionWarningBanner({
+  missingCount,
+  onDetails,
+  onIgnore
+}: {
+  missingCount: number;
+  onDetails: () => void;
+  onIgnore: () => void;
+}) {
+  return (
+    <section className="permission-banner" role="status">
+      <div>
+        <strong>Some QuickPIM features are limited.</strong>
+        <p>{missingCount} required permission{missingCount === 1 ? "" : "s"} missing or not currently visible in the captured tokens.</p>
+      </div>
+      <div className="button-row nowrap">
+        <button className="btn primary" onClick={onDetails}>
+          Details
+        </button>
+        <button className="btn subtle" onClick={onIgnore}>
+          Ignore
+        </button>
+      </div>
+    </section>
   );
 }
 

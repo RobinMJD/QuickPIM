@@ -22,7 +22,8 @@ export const DEFAULT_SETTINGS: QuickPimSettings = {
   preferences: {
     defaultDurationHours: 0.5,
     defaultSort: "name",
-    recentJustificationLimit: 8
+    recentJustificationLimit: 8,
+    permissionWarningIgnored: false
   }
 };
 

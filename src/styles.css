@@ -140,6 +140,28 @@ button {
   color: #9a3412;
 }
 
+.permission-banner {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.permission-banner strong {
+  display: block;
+  font-size: 12px;
+}
+
+.permission-banner p {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .tab-bar {
   display: flex;
   gap: 4px;
@@ -270,6 +292,14 @@ button {
 
 .panel h3 {
   font-size: 14px;
+}
+
+.panel-title-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 12px;
 }
 
 .item-list {
@@ -406,6 +436,10 @@ button {
   align-items: center;
 }
 
+.button-row.nowrap {
+  flex-wrap: nowrap;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -483,6 +517,115 @@ button {
   font-weight: 700;
 }
 
+.permissions-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.permission-list {
+  display: grid;
+  gap: 10px;
+}
+
+.permission-row {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.permission-row.ok {
+  border-left-color: #16a34a;
+}
+
+.permission-row.missing {
+  border-left-color: #dc2626;
+  background: #fffafa;
+}
+
+.permission-row-header {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.permission-row h3 {
+  margin: 0;
+  font-size: 14px;
+  color: #0f172a;
+}
+
+.permission-row p {
+  margin: 3px 0 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.permission-state {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 68px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.permission-state.ok {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.permission-state.missing {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.permission-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.permission-detail-grid strong {
+  display: block;
+  color: #334155;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.permission-note {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f1f5f9;
+}
+
+.permission-doc-link {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tutorial-list {
+  margin: 0;
+  padding-left: 20px;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.tutorial-list li + li {
+  margin-top: 6px;
+}
+
 .bundle-card {
   display: grid;
   gap: 8px;
@@ -556,6 +699,18 @@ button {
   font-size: 12px;
 }
 
+.permission-code {
+  max-height: 420px;
+  overflow: auto;
+  margin: 10px 0 0;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e2e8f0;
+  white-space: pre;
+}
+
 @media (max-width: 760px) {
   body.settings-page {
     min-width: 360px;
@@ -564,7 +719,9 @@ button {
   .settings-layout,
   .two-column,
   .form-grid,
-  .form-grid.three {
+  .form-grid.three,
+  .permission-detail-grid,
+  .panel-title-row {
     grid-template-columns: 1fr;
   }
 

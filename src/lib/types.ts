@@ -76,6 +76,8 @@ export interface QuickPimPreferences {
   defaultDurationHours: number;
   defaultSort: SortMode;
   recentJustificationLimit: number;
+  permissionWarningIgnored?: boolean;
+  permissionWarningIgnoredAt?: string;
 }
 
 export interface CachedActivationEntry {
@@ -107,6 +109,7 @@ export interface TokenStatusEntry {
   expiresInMinutes?: number;
   isExpired?: boolean;
   source?: string;
+  grantedScopes?: string[];
 }
 
 export interface TokenStatus {

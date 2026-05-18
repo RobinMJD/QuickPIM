@@ -23,6 +23,7 @@ export function makeTokenStatus(
     expiresAt: expiresAtMs === undefined ? undefined : new Date(expiresAtMs).toISOString(),
     expiresInMinutes,
     isExpired: expiresAtMs === undefined ? tokenAge > TOKEN_MAX_AGE_MINUTES : expiresAtMs <= now,
+    grantedScopes: getGrantedScopes(decoded),
     source
   };
 }
@@ -60,4 +61,13 @@ function isDecodedTokenExpired(decoded: Record<string, any>, now: number): boole
 function getTokenExpiryMs(decoded: Record<string, any> | null): number | undefined {
   const exp = Number(decoded?.exp);
   return Number.isFinite(exp) && exp > 0 ? exp * 1000 : undefined;
+}
+
+function getGrantedScopes(decoded: Record<string, any> | null): string[] {
+  const delegatedScopes =
+    typeof decoded?.scp === "string"
+      ? decoded.scp.split(/\s+/).filter(Boolean)
+      : [];
+  const appRoles = Array.isArray(decoded?.roles) ? decoded.roles.filter((role): role is string => typeof role === "string") : [];
+  return [...new Set([...delegatedScopes, ...appRoles])].sort((a, b) => a.localeCompare(b));
 }

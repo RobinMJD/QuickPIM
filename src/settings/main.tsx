@@ -11,9 +11,17 @@ import {
   mergeSettings,
   saveSettings
 } from "../lib/settings";
-import type { ActivationItem, QuickPimBundle, QuickPimSettings, SortMode } from "../lib/types";
+import {
+  buildPermissionStatus,
+  getMissingPermissionItems,
+  permissionDocsUrl,
+  permissionSetupPowerShell,
+  permissionSetupTutorial,
+  type PermissionStatusItem
+} from "../lib/permissions";
+import type { ActivationItem, QuickPimBundle, QuickPimSettings, SortMode, TokenStatus } from "../lib/types";
 
-type SettingsTab = "aliases" | "justifications" | "bundles" | "preferences" | "data";
+type SettingsTab = "permissions" | "aliases" | "justifications" | "bundles" | "preferences" | "data";
 
 interface MessageResponse<T> {
   success: boolean;
@@ -22,9 +30,10 @@ interface MessageResponse<T> {
 }
 
 function SettingsApp() {
-  const [tab, setTab] = useState<SettingsTab>("aliases");
+  const [tab, setTab] = useState<SettingsTab>(() => tabFromHash());
   const [settings, setSettings] = useState<QuickPimSettings>(DEFAULT_SETTINGS);
   const [items, setItems] = useState<ActivationItem[]>([]);
+  const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [exportText, setExportText] = useState("");
@@ -33,15 +42,25 @@ function SettingsApp() {
     void refresh();
   }, []);
 
+  useEffect(() => {
+    function handleHashChange() {
+      setTab(tabFromHash());
+    }
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
+
   async function refresh() {
     setError("");
     try {
-      const [loadedSettings, loadedItems] = await Promise.all([
+      const [loadedSettings, loadedItems, loadedTokens] = await Promise.all([
         loadSettings(),
-        sendMessage<{ items: ActivationItem[]; errors: string[] }>({ action: "getActivationItems" })
+        sendMessage<{ items: ActivationItem[]; errors: string[] }>({ action: "getActivationItems" }),
+        sendMessage<TokenStatus>({ action: "getTokenStatus" })
       ]);
       setSettings(loadedSettings);
       setItems(loadedItems.items);
+      setTokenStatus(loadedTokens);
       setExportText(JSON.stringify(loadedSettings, null, 2));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
@@ -54,6 +73,13 @@ function SettingsApp() {
     setSettings(merged);
     setExportText(JSON.stringify(merged, null, 2));
     setMessage(successMessage);
+  }
+
+  function selectTab(nextTab: SettingsTab) {
+    setTab(nextTab);
+    if (window.location.hash !== `#${nextTab}`) {
+      window.history.replaceState(null, "", `#${nextTab}`);
+    }
   }
 
   return (
@@ -76,13 +102,14 @@ function SettingsApp() {
         {message ? <p className="message">{message}</p> : null}
         <div className="settings-layout">
           <nav className="settings-nav">
-            {(["aliases", "justifications", "bundles", "preferences", "data"] as SettingsTab[]).map((item) => (
-              <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>
+            {(["permissions", "aliases", "justifications", "bundles", "preferences", "data"] as SettingsTab[]).map((item) => (
+              <button key={item} className={tab === item ? "active" : ""} onClick={() => selectTab(item)}>
                 {tabLabel(item)}
               </button>
             ))}
           </nav>
           <div>
+            {tab === "permissions" ? <PermissionsPanel settings={settings} tokenStatus={tokenStatus} onSave={persist} /> : null}
             {tab === "aliases" ? <AliasesPanel settings={settings} items={items} onSave={persist} /> : null}
             {tab === "justifications" ? <JustificationsPanel settings={settings} onSave={persist} /> : null}
             {tab === "bundles" ? <BundlesPanel settings={settings} items={items} onSave={persist} /> : null}
@@ -100,6 +127,112 @@ function SettingsApp() {
         </div>
       </section>
     </main>
+  );
+}
+
+function PermissionsPanel({
+  settings,
+  tokenStatus,
+  onSave
+}: {
+  settings: QuickPimSettings;
+  tokenStatus: TokenStatus | null;
+  onSave: (settings: QuickPimSettings, message?: string) => Promise<void>;
+}) {
+  const permissionStatus = useMemo(() => buildPermissionStatus(tokenStatus), [tokenStatus]);
+  const missingPermissions = useMemo(() => getMissingPermissionItems(permissionStatus), [permissionStatus]);
+  const warningIgnored = Boolean(settings.preferences.permissionWarningIgnored);
+
+  async function setIgnored(ignored: boolean) {
+    await onSave(
+      {
+        ...settings,
+        preferences: {
+          ...settings.preferences,
+          permissionWarningIgnored: ignored,
+          permissionWarningIgnoredAt: ignored ? new Date().toISOString() : undefined
+        }
+      },
+      ignored ? "Permission warning ignored." : "Permission warning enabled."
+    );
+  }
+
+  return (
+    <section className="panel permissions-panel">
+      <div className="panel-title-row">
+        <div>
+          <h2>Permissions</h2>
+          <p className="muted">
+            {missingPermissions.length
+              ? `${missingPermissions.length} right(s) missing. Related QuickPIM features are limited until the token or account has them.`
+              : "All required QuickPIM rights are visible in the currently captured tokens."}
+          </p>
+        </div>
+        <button className={`btn ${warningIgnored ? "" : "subtle"}`} onClick={() => void setIgnored(!warningIgnored)}>
+          {warningIgnored ? "Show popup warning" : "Ignore popup warning"}
+        </button>
+      </div>
+
+      <div className="permission-list">
+        {permissionStatus.map((item) => (
+          <PermissionRow item={item} key={item.id} />
+        ))}
+      </div>
+
+      <div className="panel">
+        <h3>Quick Tutorial</h3>
+        <ol className="tutorial-list">
+          {permissionSetupTutorial.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
+        <p className="muted">
+          Microsoft Graph permission reference:{" "}
+          <a href={permissionDocsUrl} target="_blank" rel="noreferrer">
+            {permissionDocsUrl}
+          </a>
+        </p>
+      </div>
+
+      <div className="panel">
+        <h3>Append Missing Graph Permissions</h3>
+        <p className="muted">
+          This example appends the Graph delegated scopes used by QuickPIM to a custom app registration. It keeps existing API
+          permissions and still requires admin consent afterwards.
+        </p>
+        <pre className="code-box permission-code">{permissionSetupPowerShell}</pre>
+      </div>
+    </section>
+  );
+}
+
+function PermissionRow({ item }: { item: PermissionStatusItem }) {
+  return (
+    <article className={`permission-row ${item.isPresent ? "ok" : "missing"}`}>
+      <div className="permission-row-header">
+        <span className={`permission-state ${item.isPresent ? "ok" : "missing"}`}>{item.isPresent ? "Present" : "Missing"}</span>
+        <div>
+          <h3>{item.name}</h3>
+          <p>{item.category === "graph" ? "Microsoft Graph" : "Azure Management"}</p>
+        </div>
+      </div>
+      <div className="permission-detail-grid">
+        <div>
+          <strong>Required</strong>
+          <p>{item.requiredAnyOf.join(" or ")}</p>
+        </div>
+        <div>
+          <strong>{item.isPresent ? "Detected" : "What will not work"}</strong>
+          <p>{item.isPresent ? item.matchedBy : item.missingImpact}</p>
+        </div>
+      </div>
+      {item.note ? <p className="permission-note">{item.note}</p> : null}
+      {item.docsUrl ? (
+        <a className="permission-doc-link" href={item.docsUrl} target="_blank" rel="noreferrer">
+          Microsoft documentation
+        </a>
+      ) : null}
+    </article>
   );
 }
 
@@ -368,6 +501,7 @@ function PreferencesPanel({
     await onSave({
       ...settings,
       preferences: {
+        ...settings.preferences,
         defaultDurationHours,
         defaultSort,
         recentJustificationLimit
@@ -464,6 +598,7 @@ function DataPanel({
 
 function tabLabel(tab: SettingsTab): string {
   const labels: Record<SettingsTab, string> = {
+    permissions: "Permissions",
     aliases: "Aliases",
     justifications: "Justifications",
     bundles: "Bundles",
@@ -471,6 +606,14 @@ function tabLabel(tab: SettingsTab): string {
     data: "Import / Export"
   };
   return labels[tab];
+}
+
+function tabFromHash(): SettingsTab {
+  const value = window.location.hash.replace("#", "");
+  if (["permissions", "aliases", "justifications", "bundles", "preferences", "data"].includes(value)) {
+    return value as SettingsTab;
+  }
+  return "aliases";
 }
 
 async function sendMessage<T>(message: Record<string, unknown>): Promise<T> {
