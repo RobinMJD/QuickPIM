@@ -10,6 +10,17 @@ import type {
 
 export const SETTINGS_KEY = "quickPimSettings.v1";
 const MAX_HISTORY_ENTRIES = 50;
+const MAX_ALIASES = 300;
+const MAX_ALIAS_LENGTH = 120;
+const MAX_ITEM_ID_LENGTH = 256;
+const MAX_JUSTIFICATION_LENGTH = 1024;
+const MAX_SAVED_JUSTIFICATIONS = 100;
+const MAX_BUNDLES = 50;
+const MAX_BUNDLE_ITEMS = 100;
+const MAX_BUNDLE_NAME_LENGTH = 80;
+const MAX_TICKET_FIELD_LENGTH = 128;
+const MIN_DURATION_HOURS = 0.5;
+const MAX_DURATION_HOURS = 24;
 
 export const DEFAULT_SETTINGS: QuickPimSettings = {
   version: 1,
@@ -28,19 +39,16 @@ export const DEFAULT_SETTINGS: QuickPimSettings = {
 };
 
 export function mergeSettings(input: Partial<QuickPimSettings> | undefined): QuickPimSettings {
+  const source = isRecord(input) ? input : {};
   return {
     ...DEFAULT_SETTINGS,
-    ...input,
-    aliasesByItemId: { ...DEFAULT_SETTINGS.aliasesByItemId, ...(input?.aliasesByItemId || {}) },
-    usageStatsByItemId: {
-      ...DEFAULT_SETTINGS.usageStatsByItemId,
-      ...(input?.usageStatsByItemId || {})
-    },
-    preferences: { ...DEFAULT_SETTINGS.preferences, ...(input?.preferences || {}) },
-    savedJustifications: [...(input?.savedJustifications || [])],
-    recentJustifications: [...(input?.recentJustifications || [])],
-    bundles: [...(input?.bundles || [])],
-    activationHistory: [...(input?.activationHistory || [])],
+    aliasesByItemId: sanitizeAliases(source.aliasesByItemId),
+    usageStatsByItemId: sanitizeUsageStats(source.usageStatsByItemId),
+    preferences: sanitizePreferences(source.preferences),
+    savedJustifications: sanitizeStringList(source.savedJustifications, MAX_SAVED_JUSTIFICATIONS, MAX_JUSTIFICATION_LENGTH),
+    recentJustifications: sanitizeStringList(source.recentJustifications, 20, MAX_JUSTIFICATION_LENGTH),
+    bundles: sanitizeBundles(source.bundles),
+    activationHistory: sanitizeActivationHistory(source.activationHistory),
     version: 1
   };
 }
@@ -196,4 +204,176 @@ export function createBundleId(name: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "");
   return `bundle:${slug || crypto.randomUUID()}`;
+}
+
+function sanitizeAliases(value: unknown): Record<string, string> {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const entries = Object.entries(value)
+    .slice(0, MAX_ALIASES)
+    .flatMap(([key, alias]) => {
+      const safeKey = sanitizeString(key, MAX_ITEM_ID_LENGTH);
+      const safeAlias = sanitizeString(alias, MAX_ALIAS_LENGTH);
+      return safeKey && safeAlias ? [[safeKey, safeAlias] as const] : [];
+    });
+  return Object.fromEntries(entries);
+}
+
+function sanitizeUsageStats(value: unknown): QuickPimSettings["usageStatsByItemId"] {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const entries = Object.entries(value)
+    .slice(0, MAX_ALIASES)
+    .flatMap(([key, stats]) => {
+      if (!isRecord(stats)) {
+        return [];
+      }
+      const safeKey = sanitizeString(key, MAX_ITEM_ID_LENGTH);
+      if (!safeKey) {
+        return [];
+      }
+      const activationCount = clampInteger(stats.activationCount, 0, 100000, 0);
+      const lastUsedAt = sanitizeString(stats.lastUsedAt, 64);
+      return [
+        [
+          safeKey,
+          {
+            activationCount,
+            ...(lastUsedAt ? { lastUsedAt } : {})
+          }
+        ] as const
+      ];
+    });
+  return Object.fromEntries(entries);
+}
+
+function sanitizePreferences(value: unknown): QuickPimSettings["preferences"] {
+  const preferences = isRecord(value) ? value : {};
+  const ignoredAt = sanitizeString(preferences.permissionWarningIgnoredAt, 64);
+  return {
+    defaultDurationHours: clampNumber(preferences.defaultDurationHours, MIN_DURATION_HOURS, MAX_DURATION_HOURS, DEFAULT_SETTINGS.preferences.defaultDurationHours),
+    defaultSort: isSortMode(preferences.defaultSort) ? preferences.defaultSort : DEFAULT_SETTINGS.preferences.defaultSort,
+    recentJustificationLimit: clampInteger(preferences.recentJustificationLimit, 1, 20, DEFAULT_SETTINGS.preferences.recentJustificationLimit),
+    permissionWarningIgnored: preferences.permissionWarningIgnored === true,
+    ...(ignoredAt ? { permissionWarningIgnoredAt: ignoredAt } : {})
+  };
+}
+
+function sanitizeBundles(value: unknown): QuickPimBundle[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.slice(0, MAX_BUNDLES).flatMap((bundle) => {
+    if (!isRecord(bundle)) {
+      return [];
+    }
+    const name = sanitizeString(bundle.name, MAX_BUNDLE_NAME_LENGTH);
+    if (!name) {
+      return [];
+    }
+    const id = sanitizeString(bundle.id, MAX_ITEM_ID_LENGTH) || createBundleId(name);
+    const itemIds = sanitizeStringList(bundle.itemIds, MAX_BUNDLE_ITEMS, MAX_ITEM_ID_LENGTH);
+    return [
+      {
+        id,
+        name,
+        itemIds,
+        defaultDurationHours: clampNumber(bundle.defaultDurationHours, MIN_DURATION_HOURS, MAX_DURATION_HOURS, DEFAULT_SETTINGS.preferences.defaultDurationHours),
+        defaultJustification: sanitizeString(bundle.defaultJustification, MAX_JUSTIFICATION_LENGTH),
+        defaultTicketSystem: sanitizeString(bundle.defaultTicketSystem, MAX_TICKET_FIELD_LENGTH),
+        defaultTicketNumber: sanitizeString(bundle.defaultTicketNumber, MAX_TICKET_FIELD_LENGTH)
+      }
+    ];
+  });
+}
+
+function sanitizeActivationHistory(value: unknown): ActivationHistoryEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.slice(0, MAX_HISTORY_ENTRIES).flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+    const id = sanitizeString(entry.id, MAX_ITEM_ID_LENGTH);
+    const itemId = sanitizeString(entry.itemId, MAX_ITEM_ID_LENGTH);
+    const itemName = sanitizeString(entry.itemName, MAX_ALIAS_LENGTH);
+    const itemType = isActivationItemType(entry.itemType) ? entry.itemType : undefined;
+    const activatedAt = sanitizeString(entry.activatedAt, 64);
+    if (!id || !itemId || !itemName || !itemType || !activatedAt) {
+      return [];
+    }
+    return [
+      {
+        id,
+        itemId,
+        itemName,
+        itemType,
+        activatedAt,
+        bundleName: sanitizeString(entry.bundleName, MAX_BUNDLE_NAME_LENGTH)
+      }
+    ];
+  });
+}
+
+function sanitizeStringList(value: unknown, maxItems: number, maxLength: number): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    const safeItem = sanitizeString(item, maxLength);
+    if (!safeItem) continue;
+    const key = safeItem.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(safeItem);
+    if (result.length >= maxItems) break;
+  }
+  return result;
+}
+
+function sanitizeString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  return trimmed.slice(0, maxLength);
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, numberValue));
+}
+
+function clampInteger(value: unknown, min: number, max: number, fallback: number): number {
+  return Math.round(clampNumber(value, min, max, fallback));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isSortMode(value: unknown): value is SortMode {
+  return value === "name" || value === "lastUsed" || value === "activationCount" || value === "type" || value === "scope";
+}
+
+function isActivationItemType(value: unknown): value is ActivationItem["type"] {
+  return value === "directoryRole" || value === "azureRole" || value === "pimGroup";
 }

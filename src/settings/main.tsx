@@ -21,7 +21,10 @@ import {
 } from "../lib/permissions";
 import type { ActivationItem, QuickPimBundle, QuickPimSettings, SortMode, TokenStatus } from "../lib/types";
 
-type SettingsTab = "permissions" | "aliases" | "justifications" | "bundles" | "preferences" | "data";
+type SettingsTab = "about" | "permissions" | "aliases" | "justifications" | "bundles" | "preferences" | "data";
+
+const ORIGINAL_AUTHOR = "Daniel Bradley";
+const REPOSITORY_URL = "https://github.com/RobinMJD/QuickPIM";
 
 interface MessageResponse<T> {
   success: boolean;
@@ -75,6 +78,15 @@ function SettingsApp() {
     setMessage(successMessage);
   }
 
+  async function clearCapturedTokens() {
+    await sendMessage<boolean>({ action: "clearToken" });
+    setTokenStatus({
+      graph: { hasToken: false },
+      azureManagement: { hasToken: false }
+    });
+    setMessage("Captured tokens cleared.");
+  }
+
   function selectTab(nextTab: SettingsTab) {
     setTab(nextTab);
     if (window.location.hash !== `#${nextTab}`) {
@@ -102,13 +114,14 @@ function SettingsApp() {
         {message ? <p className="message">{message}</p> : null}
         <div className="settings-layout">
           <nav className="settings-nav">
-            {(["permissions", "aliases", "justifications", "bundles", "preferences", "data"] as SettingsTab[]).map((item) => (
+            {(["about", "permissions", "aliases", "justifications", "bundles", "preferences", "data"] as SettingsTab[]).map((item) => (
               <button key={item} className={tab === item ? "active" : ""} onClick={() => selectTab(item)}>
                 {tabLabel(item)}
               </button>
             ))}
           </nav>
           <div>
+            {tab === "about" ? <AboutPanel tokenStatus={tokenStatus} onClearTokens={() => void clearCapturedTokens()} /> : null}
             {tab === "permissions" ? <PermissionsPanel settings={settings} tokenStatus={tokenStatus} onSave={persist} /> : null}
             {tab === "aliases" ? <AliasesPanel settings={settings} items={items} onSave={persist} /> : null}
             {tab === "justifications" ? <JustificationsPanel settings={settings} onSave={persist} /> : null}
@@ -127,6 +140,52 @@ function SettingsApp() {
         </div>
       </section>
     </main>
+  );
+}
+
+function AboutPanel({
+  tokenStatus,
+  onClearTokens
+}: {
+  tokenStatus: TokenStatus | null;
+  onClearTokens: () => void;
+}) {
+  const manifest = chrome.runtime.getManifest();
+  return (
+    <section className="panel about-panel">
+      <div>
+        <h2>{manifest.name} {manifest.version}</h2>
+        <p className="muted">Quick activation for Microsoft Entra roles, Azure roles, and PIM groups.</p>
+      </div>
+      <div className="about-grid">
+        <div>
+          <strong>Original author: {ORIGINAL_AUTHOR}</strong>
+          <p className="muted">v2 continues the QuickPIM project with the React rewrite, PIM groups, bundles, and security hardening.</p>
+        </div>
+        <div>
+          <strong>Privacy</strong>
+          <p className="muted">Tokens and settings stay in this browser profile. QuickPIM only calls Microsoft Graph and Azure Management APIs.</p>
+        </div>
+        <div>
+          <strong>Repository</strong>
+          <p className="muted">
+            <a href={REPOSITORY_URL} target="_blank" rel="noreferrer">
+              {REPOSITORY_URL}
+            </a>
+          </p>
+        </div>
+        <div>
+          <strong>Captured tokens</strong>
+          <p className="muted">
+            Graph: {tokenStatus?.graph.hasToken ? "captured" : "missing"} / Azure:{" "}
+            {tokenStatus?.azureManagement.hasToken ? "captured" : "missing"}
+          </p>
+          <button className="btn danger" onClick={onClearTokens} style={{ marginTop: 8 }}>
+            Clear captured tokens
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -598,6 +657,7 @@ function DataPanel({
 
 function tabLabel(tab: SettingsTab): string {
   const labels: Record<SettingsTab, string> = {
+    about: "About",
     permissions: "Permissions",
     aliases: "Aliases",
     justifications: "Justifications",
@@ -610,7 +670,7 @@ function tabLabel(tab: SettingsTab): string {
 
 function tabFromHash(): SettingsTab {
   const value = window.location.hash.replace("#", "");
-  if (["permissions", "aliases", "justifications", "bundles", "preferences", "data"].includes(value)) {
+  if (["about", "permissions", "aliases", "justifications", "bundles", "preferences", "data"].includes(value)) {
     return value as SettingsTab;
   }
   return "aliases";

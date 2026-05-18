@@ -12,6 +12,11 @@ import type {
   RoleManagementPolicyRuleApi,
   TicketInfo
 } from "./types";
+import { azureManagementUrl, encodePathSegment, graphApiUrl } from "./apiUrls";
+
+const MAX_DURATION_HOURS = 24;
+const MAX_JUSTIFICATION_LENGTH = 1024;
+const MAX_TICKET_FIELD_LENGTH = 128;
 
 export function durationHoursToIso(durationHours: number): string {
   return `PT${Math.round(durationHours * 60)}M`;
@@ -167,6 +172,7 @@ export function buildActivationRequest(
   startDateTime = new Date().toISOString(),
   requestId: string = crypto.randomUUID()
 ): ActivationRequest {
+  validateActivationInput(item, durationHours, justification, ticketInfo);
   const duration = durationHoursToIso(durationHours);
 
   if (item.type === "directoryRole") {
@@ -188,7 +194,7 @@ export function buildActivationRequest(
     addTicketInfo(body, ticketInfo);
 
     return {
-      endpoint: "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentScheduleRequests",
+      endpoint: graphApiUrl("/v1.0/roleManagement/directory/roleAssignmentScheduleRequests"),
       method: "POST",
       tokenKind: "graph",
       body
@@ -220,7 +226,9 @@ export function buildActivationRequest(
     addTicketInfo(properties, ticketInfo);
 
     return {
-      endpoint: `https://management.azure.com${item.scope}/providers/Microsoft.Authorization/roleAssignmentScheduleRequests/${requestId}?api-version=2020-10-01`,
+      endpoint: azureManagementUrl(
+        `${item.scope}/providers/Microsoft.Authorization/roleAssignmentScheduleRequests/${encodePathSegment(requestId)}?api-version=2020-10-01`
+      ),
       method: "PUT",
       tokenKind: "azureManagement",
       body
@@ -245,7 +253,7 @@ export function buildActivationRequest(
   addTicketInfo(body, ticketInfo);
 
   return {
-    endpoint: "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests",
+    endpoint: graphApiUrl("/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests"),
     method: "POST",
     tokenKind: "graph",
     body
@@ -289,6 +297,60 @@ function addTicketInfo(target: Record<string, unknown>, ticketInfo: TicketInfo) 
       ticketNumber: ticketInfo.ticketNumber || "N/A"
     };
   }
+}
+
+function validateActivationInput(
+  item: ActivationItem,
+  durationHours: number,
+  justification: string,
+  ticketInfo: TicketInfo
+): void {
+  if (!Number.isFinite(durationHours) || durationHours <= 0 || durationHours > MAX_DURATION_HOURS) {
+    throw new Error(`Activation duration must be between 0 and ${MAX_DURATION_HOURS} hours.`);
+  }
+
+  if (typeof justification !== "string" || justification.length > MAX_JUSTIFICATION_LENGTH) {
+    throw new Error(`Activation justification must be ${MAX_JUSTIFICATION_LENGTH} characters or fewer.`);
+  }
+
+  if ((ticketInfo.ticketSystem?.length || 0) > MAX_TICKET_FIELD_LENGTH || (ticketInfo.ticketNumber?.length || 0) > MAX_TICKET_FIELD_LENGTH) {
+    throw new Error(`Ticket fields must be ${MAX_TICKET_FIELD_LENGTH} characters or fewer.`);
+  }
+
+  if (!item || typeof item !== "object") {
+    throw new Error("Activation item is invalid.");
+  }
+
+  if (!item.id || !item.displayName || !item.principalId) {
+    throw new Error("Activation item is missing required identifiers.");
+  }
+
+  if (item.type === "directoryRole") {
+    if (!item.roleDefinitionId || !item.directoryScopeId) {
+      throw new Error("Directory role activation item is missing required identifiers.");
+    }
+    return;
+  }
+
+  if (item.type === "azureRole") {
+    if (!isSafeAzureScope(item.scope) || !item.roleDefinitionId) {
+      throw new Error("Azure role activation item has an invalid scope or role definition.");
+    }
+    return;
+  }
+
+  if (item.type === "pimGroup") {
+    if (!item.groupId || (item.accessId !== "member" && item.accessId !== "owner")) {
+      throw new Error("PIM group activation item is missing required identifiers.");
+    }
+    return;
+  }
+
+  throw new Error("Unsupported activation item type.");
+}
+
+function isSafeAzureScope(scope: string): boolean {
+  return /^\/subscriptions\/[^/?#\s]+(?:\/[^?#]*)?$/i.test(scope) && !scope.includes("..");
 }
 
 function isEndUserAssignmentRule(rule: RoleManagementPolicyRuleApi): boolean {

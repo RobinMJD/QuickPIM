@@ -5,6 +5,7 @@ import {
   createActivationHistoryEntries,
   expandBundle,
   getDisplayName,
+  mergeSettings,
   recordActivations,
   sortItems
 } from "../src/lib/settings";
@@ -233,6 +234,49 @@ describe("settings helpers", () => {
       itemId: "directoryRole:reader:/",
       bundleName: "Daily ops",
       activatedAt: now
+    });
+  });
+
+  test("sanitizes imported settings instead of trusting arbitrary persisted shapes", () => {
+    const imported = mergeSettings({
+      aliasesByItemId: {
+        "directoryRole:reader:/": "x".repeat(180),
+        ["bad-key".repeat(80)]: "Ignored"
+      },
+      savedJustifications: ["Patch window", "Patch window", "x".repeat(2000)],
+      recentJustifications: ["Recent work", "x".repeat(2000)],
+      bundles: [
+        {
+          id: "bundle:unsafe",
+          name: "x".repeat(120),
+          itemIds: Array.from({ length: 140 }, (_, index) => `item-${index}`),
+          defaultDurationHours: 99,
+          defaultJustification: "x".repeat(2000),
+          defaultTicketSystem: "x".repeat(200),
+          defaultTicketNumber: "OPS-1"
+        }
+      ],
+      preferences: {
+        defaultDurationHours: 99,
+        defaultSort: "invalid" as any,
+        recentJustificationLimit: 99
+      }
+    });
+
+    expect(imported.aliasesByItemId["directoryRole:reader:/"]).toHaveLength(120);
+    expect(imported.aliasesByItemId).not.toHaveProperty("bad-key".repeat(80));
+    expect(imported.savedJustifications).toHaveLength(2);
+    expect(imported.savedJustifications[1]).toHaveLength(1024);
+    expect(imported.recentJustifications[1]).toHaveLength(1024);
+    expect(imported.bundles[0].name).toHaveLength(80);
+    expect(imported.bundles[0].itemIds).toHaveLength(100);
+    expect(imported.bundles[0].defaultDurationHours).toBe(24);
+    expect(imported.bundles[0].defaultJustification).toHaveLength(1024);
+    expect(imported.bundles[0].defaultTicketSystem).toHaveLength(128);
+    expect(imported.preferences).toMatchObject({
+      defaultDurationHours: 24,
+      defaultSort: "name",
+      recentJustificationLimit: 20
     });
   });
 });

@@ -8,6 +8,10 @@ import {
   normalizePimGroup,
   parseIsoDurationMs
 } from "./lib/pim";
+import { azureManagementUrl, encodePathSegment, graphApiUrl } from "./lib/apiUrls";
+import { mapWithConcurrency } from "./lib/concurrency";
+import { isTrustedRuntimeSender, validateQuickPimMessage } from "./lib/messages";
+import { assertAllowedApiUrl, getAllowedTokenKindForUrl, sanitizeErrorMessage, validateCapturedToken } from "./lib/security";
 import { assertFreshToken, decodeToken, makeTokenStatus } from "./lib/token";
 import type {
   ActivationItem,
@@ -19,23 +23,8 @@ import type {
   PimGroupApi,
   RoleManagementPolicyAssignmentApi,
   TicketInfo,
-  TokenKind,
   TokenStatus
 } from "./lib/types";
-
-type QuickPimMessage =
-  | { action: "getTokenStatus" }
-  | { action: "manualSetToken"; token: string; tokenKind?: TokenKind }
-  | { action: "clearToken" }
-  | { action: "getActivationItems" }
-  | { action: "getActiveItems" }
-  | {
-      action: "activateItems";
-      items: ActivationItem[];
-      durationHours: number;
-      justification: string;
-      ticketInfo?: TicketInfo;
-    };
 
 interface StoredTokens {
   graphToken?: string;
@@ -54,23 +43,34 @@ chrome.webRequest.onSendHeaders.addListener(
   ["requestHeaders"]
 );
 
-chrome.runtime.onMessage.addListener((message: QuickPimMessage, _sender, sendResponse) => {
-  handleMessage(message)
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!isTrustedRuntimeSender(sender)) {
+    sendResponse({ success: false, error: "Untrusted QuickPIM message sender." });
+    return false;
+  }
+
+  let validatedMessage: ReturnType<typeof validateQuickPimMessage>;
+  try {
+    validatedMessage = validateQuickPimMessage(message);
+  } catch (error) {
+    sendResponse({ success: false, error: sanitizeErrorMessage(error) });
+    return false;
+  }
+
+  handleMessage(validatedMessage)
     .then((data) => sendResponse({ success: true, data }))
     .catch((error: unknown) => {
-      console.error("QuickPIM background error:", error);
-      sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) });
+      const message = sanitizeErrorMessage(error);
+      console.error("QuickPIM background error:", message);
+      sendResponse({ success: false, error: message });
     });
   return true;
 });
 
-async function handleMessage(message: QuickPimMessage): Promise<unknown> {
+async function handleMessage(message: ReturnType<typeof validateQuickPimMessage>): Promise<unknown> {
   switch (message.action) {
     case "getTokenStatus":
       return getTokenStatus();
-    case "manualSetToken":
-      await setManualToken(message.token, message.tokenKind || "graph");
-      return true;
     case "clearToken":
       await clearTokens();
       return true;
@@ -86,13 +86,24 @@ async function handleMessage(message: QuickPimMessage): Promise<unknown> {
 }
 
 function captureToken(details: chrome.webRequest.WebRequestHeadersDetails): void {
+  const tokenKind = getAllowedTokenKindForUrl(details.url);
+  if (!tokenKind) {
+    return;
+  }
+
   const authHeader = details.requestHeaders?.find((header) => header.name.toLowerCase() === "authorization");
   if (!authHeader?.value?.startsWith("Bearer ")) {
     return;
   }
 
   const token = authHeader.value.slice(7);
-  if (details.url.includes("graph.microsoft.com")) {
+  const validation = validateCapturedToken(token, tokenKind);
+  if (!validation.ok) {
+    void clearTokenKind(tokenKind);
+    return;
+  }
+
+  if (tokenKind === "graph") {
     void chrome.storage.local.set({
       graphToken: token,
       tokenTimestamp: Date.now(),
@@ -100,7 +111,7 @@ function captureToken(details: chrome.webRequest.WebRequestHeadersDetails): void
     });
   }
 
-  if (details.url.includes("management.azure.com")) {
+  if (tokenKind === "azureManagement") {
     void chrome.storage.local.set({
       azureManagementToken: token,
       azureManagementTokenTimestamp: Date.now(),
@@ -120,27 +131,6 @@ async function getStoredTokens(): Promise<StoredTokens> {
   ]);
 }
 
-async function setManualToken(token: string, tokenKind: TokenKind): Promise<void> {
-  if (!token || token.length < 50) {
-    throw new Error("Invalid token provided");
-  }
-
-  if (tokenKind === "azureManagement") {
-    await chrome.storage.local.set({
-      azureManagementToken: token,
-      azureManagementTokenTimestamp: Date.now(),
-      azureManagementTokenSource: "manual-entry"
-    });
-    return;
-  }
-
-  await chrome.storage.local.set({
-    graphToken: token,
-    tokenTimestamp: Date.now(),
-    tokenSource: "manual-entry"
-  });
-}
-
 async function clearTokens(): Promise<void> {
   await chrome.storage.local.remove([
     "graphToken",
@@ -152,15 +142,42 @@ async function clearTokens(): Promise<void> {
   ]);
 }
 
+async function clearTokenKind(tokenKind: "graph" | "azureManagement"): Promise<void> {
+  if (tokenKind === "graph") {
+    await chrome.storage.local.remove(["graphToken", "tokenTimestamp", "tokenSource"]);
+    return;
+  }
+
+  await chrome.storage.local.remove([
+    "azureManagementToken",
+    "azureManagementTokenTimestamp",
+    "azureManagementTokenSource"
+  ]);
+}
+
 async function getTokenStatus(): Promise<TokenStatus> {
   const tokens = await getStoredTokens();
+  const graphValidation = tokens.graphToken ? validateCapturedToken(tokens.graphToken, "graph") : undefined;
+  const azureValidation = tokens.azureManagementToken
+    ? validateCapturedToken(tokens.azureManagementToken, "azureManagement")
+    : undefined;
+
+  if (graphValidation && !graphValidation.ok) {
+    await clearTokenKind("graph");
+  }
+  if (azureValidation && !azureValidation.ok) {
+    await clearTokenKind("azureManagement");
+  }
+
   return {
-    graph: makeTokenStatus(tokens.graphToken, tokens.tokenTimestamp, tokens.tokenSource),
-    azureManagement: makeTokenStatus(
-      tokens.azureManagementToken,
-      tokens.azureManagementTokenTimestamp,
-      tokens.azureManagementTokenSource
-    )
+    graph: graphValidation?.ok ? makeTokenStatus(tokens.graphToken, tokens.tokenTimestamp, tokens.tokenSource) : { hasToken: false },
+    azureManagement: azureValidation?.ok
+      ? makeTokenStatus(
+          tokens.azureManagementToken,
+          tokens.azureManagementTokenTimestamp,
+          tokens.azureManagementTokenSource
+        )
+      : { hasToken: false }
   };
 }
 
@@ -178,7 +195,7 @@ async function getActivationItems(): Promise<{ items: ActivationItem[]; errors: 
     if (result.status === "fulfilled") {
       items.push(...result.value);
     } else {
-      errors.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
+      errors.push(sanitizeErrorMessage(result.reason));
     }
   }
 
@@ -199,7 +216,7 @@ async function getActiveItems(): Promise<{ items: ActivationItem[]; errors: stri
     if (result.status === "fulfilled") {
       items.push(...result.value);
     } else {
-      errors.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
+      errors.push(sanitizeErrorMessage(result.reason));
     }
   }
 
@@ -214,7 +231,7 @@ async function getDirectoryRoles(graphToken: string): Promise<ActivationItem[]> 
     "$expand": "roleDefinition"
   });
   const roles = await fetchAllPages<DirectoryRoleApi>(
-    `https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilitySchedules?${query.toString()}`,
+    graphApiUrl(`/v1.0/roleManagement/directory/roleEligibilitySchedules?${query.toString()}`),
     graphToken
   );
   const definitions = await getDirectoryRoleDefinitionsBestEffort(graphToken);
@@ -234,7 +251,7 @@ async function getDirectoryRoles(graphToken: string): Promise<ActivationItem[]> 
 
 async function getDirectoryRoleDefinitions(graphToken: string): Promise<Record<string, string>> {
   const roles = await fetchAllPages<DirectoryRoleDefinitionApi>(
-    "https://graph.microsoft.com/v1.0/roleManagement/directory/roleDefinitions",
+    graphApiUrl("/v1.0/roleManagement/directory/roleDefinitions"),
     graphToken
   );
   return buildDirectoryRoleDefinitionNameMap(roles);
@@ -260,7 +277,7 @@ async function getDirectoryRolePolicyRequirementsBestEffort(
         "$expand": "policy($expand=rules)"
       });
       return fetchAllPages<RoleManagementPolicyAssignmentApi>(
-        `https://graph.microsoft.com/beta/policies/roleManagementPolicyAssignments?${query.toString()}`,
+        graphApiUrl(`/beta/policies/roleManagementPolicyAssignments?${query.toString()}`),
         graphToken
       );
     })
@@ -287,7 +304,7 @@ function withDirectoryRoleDefinitionName(role: DirectoryRoleApi, definitions: Re
 async function getPimGroups(graphToken: string): Promise<ActivationItem[]> {
   assertFreshToken(graphToken, "graph");
   const schedules = await fetchAllPages<PimGroupApi>(
-    "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules/filterByCurrentUser(on='principal')",
+    graphApiUrl("/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules/filterByCurrentUser(on='principal')"),
     graphToken
   );
   const groupIds = [...new Set(schedules.map((schedule) => schedule.groupId).filter(Boolean) as string[])];
@@ -308,15 +325,17 @@ async function getPimGroupPolicyRequirementsBestEffort(
   graphToken: string,
   groupIds: string[]
 ): Promise<Record<string, Record<string, Partial<ActivationRequirements>>>> {
-  const entries = await Promise.all(
-    groupIds.map(async (groupId) => {
+  const entries = await mapWithConcurrency(
+    groupIds,
+    4,
+    async (groupId) => {
       try {
         const query = new URLSearchParams({
           "$filter": `scopeId eq '${groupId}' and scopeType eq 'Group'`,
           "$expand": "policy($expand=rules)"
         });
         const assignments = await fetchAllPages<RoleManagementPolicyAssignmentApi>(
-          `https://graph.microsoft.com/beta/policies/roleManagementPolicyAssignments?${query.toString()}`,
+          graphApiUrl(`/beta/policies/roleManagementPolicyAssignments?${query.toString()}`),
           graphToken
         );
         const requirementsByRole = buildRolePolicyRequirementMap(assignments);
@@ -332,24 +351,26 @@ async function getPimGroupPolicyRequirementsBestEffort(
       } catch {
         return [groupId, {}] as const;
       }
-    })
+    }
   );
   return Object.fromEntries(entries);
 }
 
 async function getGroupInfos(graphToken: string, groupIds: string[]): Promise<Record<string, GroupInfo>> {
-  const entries = await Promise.all(
-    groupIds.map(async (groupId) => {
+  const entries = await mapWithConcurrency(
+    groupIds,
+    6,
+    async (groupId) => {
       try {
         const group = await fetchJson<GroupInfo>(
-          `https://graph.microsoft.com/v1.0/groups/${groupId}?$select=id,displayName,description,mail`,
+          graphApiUrl(`/v1.0/groups/${encodePathSegment(groupId)}?$select=id,displayName,description,mail`),
           graphToken
         );
         return [groupId, group] as const;
       } catch {
         return [groupId, { id: groupId, displayName: groupId }] as const;
       }
-    })
+    }
   );
   return Object.fromEntries(entries);
 }
@@ -360,7 +381,9 @@ async function getAzureRoles(azureManagementToken: string): Promise<ActivationIt
   const roleGroups = await Promise.allSettled(
     subscriptions.map(async (subscription) => {
       const roles = await fetchAllPages<AzureRoleApi>(
-        `https://management.azure.com/subscriptions/${subscription.subscriptionId}/providers/Microsoft.Authorization/roleEligibilityScheduleInstances?api-version=2020-10-01&$filter=asTarget()`,
+        azureManagementUrl(
+          `/subscriptions/${encodePathSegment(subscription.subscriptionId)}/providers/Microsoft.Authorization/roleEligibilityScheduleInstances?api-version=2020-10-01&$filter=asTarget()`
+        ),
         azureManagementToken
       );
       return roles.map((role) =>
@@ -381,18 +404,20 @@ async function getAzureRoles(azureManagementToken: string): Promise<ActivationIt
 async function applyAzureRolePolicyRequirements(items: ActivationItem[], token: string): Promise<ActivationItem[]> {
   const azureItems = items.filter((item): item is Extract<ActivationItem, { type: "azureRole" }> => item.type === "azureRole");
   const uniqueScopes = [...new Set(azureItems.map((item) => item.scope))];
-  const policyEntries = await Promise.all(
-    uniqueScopes.map(async (scope) => {
+  const policyEntries = await mapWithConcurrency(
+    uniqueScopes,
+    4,
+    async (scope) => {
       try {
         const assignments = await fetchAllPages<RoleManagementPolicyAssignmentApi>(
-          `https://management.azure.com${scope}/providers/Microsoft.Authorization/roleManagementPolicyAssignments?api-version=2020-10-01`,
+          azureManagementUrl(`${scope}/providers/Microsoft.Authorization/roleManagementPolicyAssignments?api-version=2020-10-01`),
           token
         );
         return [scope, buildRolePolicyRequirementMap(assignments)] as const;
       } catch {
         return [scope, {}] as const;
       }
-    })
+    }
   );
   const requirementsByScope = Object.fromEntries(policyEntries);
 
@@ -408,7 +433,7 @@ async function applyAzureRolePolicyRequirements(items: ActivationItem[], token: 
 
 async function getSubscriptions(token: string): Promise<Array<{ subscriptionId: string; displayName: string }>> {
   const data = await fetchJson<{ value?: Array<{ subscriptionId: string; displayName: string }> }>(
-    "https://management.azure.com/subscriptions?api-version=2020-01-01",
+    azureManagementUrl("/subscriptions?api-version=2020-01-01"),
     token
   );
   return data.value || [];
@@ -417,7 +442,7 @@ async function getSubscriptions(token: string): Promise<Array<{ subscriptionId: 
 async function getActiveDirectoryRoles(graphToken: string): Promise<ActivationItem[]> {
   assertFreshToken(graphToken, "graph");
   const roles = await fetchAllPages<DirectoryRoleApi & { action?: string; status?: string; scheduleInfo?: any }>(
-    "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentScheduleRequests/filterByCurrentUser(on='principal')",
+    graphApiUrl("/v1.0/roleManagement/directory/roleAssignmentScheduleRequests/filterByCurrentUser(on='principal')"),
     graphToken
   );
   const definitions = await getDirectoryRoleDefinitionsBestEffort(graphToken);
@@ -445,7 +470,9 @@ async function getActiveAzureRoles(azureManagementToken: string): Promise<Activa
   const roleGroups = await Promise.allSettled(
     subscriptions.map(async (subscription) => {
       const roles = await fetchAllPages<AzureRoleApi>(
-        `https://management.azure.com/subscriptions/${subscription.subscriptionId}/providers/Microsoft.Authorization/roleAssignmentScheduleInstances?api-version=2020-10-01&$filter=asTarget()`,
+        azureManagementUrl(
+          `/subscriptions/${encodePathSegment(subscription.subscriptionId)}/providers/Microsoft.Authorization/roleAssignmentScheduleInstances?api-version=2020-10-01&$filter=asTarget()`
+        ),
         azureManagementToken
       );
       return roles
@@ -482,18 +509,20 @@ async function applyAzureRoleDefinitionNames(items: ActivationItem[], token: str
   }
 
   const definitions = Object.fromEntries(
-    await Promise.all(
-      unresolvedDefinitionIds.map(async (roleDefinitionId) => {
+    await mapWithConcurrency(
+      unresolvedDefinitionIds,
+      6,
+      async (roleDefinitionId) => {
         try {
           const definition = await fetchJson<{ properties?: { roleName?: string } }>(
-            `https://management.azure.com${roleDefinitionId}?api-version=2022-04-01`,
+            azureManagementUrl(`${roleDefinitionId}?api-version=2022-04-01`),
             token
           );
           return [roleDefinitionId, definition.properties?.roleName || roleDefinitionId.split("/").at(-1) || roleDefinitionId] as const;
         } catch {
           return [roleDefinitionId, roleDefinitionId.split("/").at(-1) || roleDefinitionId] as const;
         }
-      })
+      }
     )
   );
 
@@ -509,7 +538,7 @@ async function applyAzureRoleDefinitionNames(items: ActivationItem[], token: str
 async function getActivePimGroups(graphToken: string): Promise<ActivationItem[]> {
   assertFreshToken(graphToken, "graph");
   const schedules = await fetchAllPages<PimGroupApi>(
-    "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules/filterByCurrentUser(on='principal')",
+    graphApiUrl("/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules/filterByCurrentUser(on='principal')"),
     graphToken
   );
   const groupInfos = await getGroupInfos(
@@ -542,6 +571,7 @@ async function activateItems(
     items.map(async (item) => {
       try {
         const request = buildActivationRequest(item, durationHours, justification.trim(), ticketInfo, startDateTime);
+        assertAllowedApiUrl(request.endpoint, request.tokenKind);
         const token = request.tokenKind === "graph" ? tokens.graphToken : tokens.azureManagementToken;
         if (!token) {
           throw new Error(request.tokenKind === "graph" ? "Graph token is missing." : "Azure Management token is missing.");
@@ -558,7 +588,7 @@ async function activateItems(
 
         if (!response.ok) {
           const errorData = await safeJson(response);
-          throw new Error(errorData?.error?.message || `${response.status} ${response.statusText}`);
+          throw new Error(sanitizeErrorMessage(errorData?.error?.message || `${response.status} ${response.statusText}`));
         }
 
         const data = await safeJson(response);
@@ -573,7 +603,7 @@ async function activateItems(
           itemId: item.id,
           itemName: item.displayName,
           success: false,
-          error: error instanceof Error ? error.message : String(error)
+          error: sanitizeErrorMessage(error)
         };
       }
     })
@@ -592,6 +622,7 @@ async function fetchAllPages<T>(url: string, token: string): Promise<T[]> {
   let nextUrl: string | undefined = url;
 
   while (nextUrl) {
+    assertAllowedApiUrl(nextUrl);
     const data: { value?: T[]; "@odata.nextLink"?: string; nextLink?: string } = await fetchJson(nextUrl, token);
     values.push(...(data.value || []));
     nextUrl = data["@odata.nextLink"] || data.nextLink;
@@ -601,6 +632,7 @@ async function fetchAllPages<T>(url: string, token: string): Promise<T[]> {
 }
 
 async function fetchJson<T>(url: string, token: string): Promise<T> {
+  assertAllowedApiUrl(url);
   const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -610,7 +642,7 @@ async function fetchJson<T>(url: string, token: string): Promise<T> {
 
   if (!response.ok) {
     const errorData = await safeJson(response);
-    throw new Error(errorData?.error?.message || `${response.status} ${response.statusText}`);
+    throw new Error(sanitizeErrorMessage(errorData?.error?.message || `${response.status} ${response.statusText}`));
   }
 
   return (await response.json()) as T;

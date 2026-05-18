@@ -34,6 +34,10 @@ export function assertFreshToken(token: string, tokenKind: TokenKind, now = Date
     throw new Error(tokenKind === "graph" ? "Graph token is invalid." : "Azure Management token is invalid.");
   }
 
+  if (getTokenExpiryMs(decoded) === undefined) {
+    throw new Error(tokenKind === "graph" ? "Graph token expiry is invalid." : "Azure Management token expiry is invalid.");
+  }
+
   if (isDecodedTokenExpired(decoded, now)) {
     throw new Error(tokenKind === "graph" ? "Graph token expired. Refresh in portal." : "Azure Management token expired. Refresh in portal.");
   }

@@ -2,6 +2,10 @@
 
 QuickPIM is a Chrome MV3 extension for quickly activating Microsoft Entra PIM roles, Azure resource PIM roles, and PIM-enabled groups from one compact interface.
 
+Current version: **v2.0.0**
+
+Original author: Daniel Bradley. This repository continues the original QuickPIM project with later community contributions and the v2 React/TypeScript rewrite.
+
 ## Features
 
 - Activate eligible Entra roles, Azure roles, and PIM groups.
@@ -45,6 +49,8 @@ npm run build
 
 Load `dist/` as an unpacked extension from `chrome://extensions`.
 
+The extension version is declared in both `package.json` and `public/manifest.json`; keep them in sync for each release.
+
 ## Usage
 
 1. Sign in to the Azure Portal or Microsoft Entra admin center.
@@ -67,6 +73,16 @@ After building, load `dist/` and verify:
 
 - Roles protected by authentication contexts may still require extra interactive steps outside the extension.
 - QuickPIM depends on tokens already captured from Microsoft first-party portals; it does not perform its own OAuth sign-in flow.
+
+## Changelog
+
+### v2.0.0
+
+- Adds visible versioning and original author attribution.
+- Narrows extension host permissions to Microsoft Graph and Azure Management.
+- Adds stricter token, runtime message, activation payload, and settings import validation.
+- Adds a settings About page with token-clearing controls and local privacy notes.
+- Documents the security review in `SECURITY_REVIEW.md`.
 
 ## License
 
