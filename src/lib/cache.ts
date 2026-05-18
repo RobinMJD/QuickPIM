@@ -7,9 +7,10 @@ export const DEFAULT_ACTIVE_CACHE_TTL_MS = 60 * 1000;
 export function isCacheEntryFresh(
   entry: CachedActivationEntry | undefined,
   ttlMs: number,
-  now = Date.now()
+  now = Date.now(),
+  cacheKey?: string
 ): entry is CachedActivationEntry {
-  return Boolean(entry && now - entry.fetchedAt < ttlMs);
+  return Boolean(entry && now - entry.fetchedAt < ttlMs && (cacheKey === undefined || entry.cacheKey === cacheKey));
 }
 
 export function formatCacheAge(fetchedAt: number | undefined, now = Date.now()): string {
@@ -48,32 +49,49 @@ export async function getDataWithCache(
   cache: QuickPimDataCache,
   ttlMs: number,
   force: boolean,
-  fetcher: () => Promise<{ items: CachedActivationEntry["items"]; errors: string[] }>,
-  now = Date.now()
+  fetcher: () => Promise<{ items: CachedActivationEntry["items"]; errors: string[]; diagnostics?: CachedActivationEntry["diagnostics"] }>,
+  now = Date.now(),
+  cacheKey?: string
 ): Promise<{ entry: CachedActivationEntry; fromCache: boolean; cache: QuickPimDataCache }> {
   const cached = cache[key];
-  if (!force && isCacheEntryFresh(cached, ttlMs, now)) {
-    return { entry: { ...cached, errors: [] }, fromCache: true, cache };
+  if (!force && isCacheEntryFresh(cached, ttlMs, now, cacheKey)) {
+    return { entry: markDiagnosticsFromCache({ ...cached, errors: [] }, true), fromCache: true, cache };
   }
 
   try {
     const fresh = await fetcher();
     const entry: CachedActivationEntry = {
       ...fresh,
-      fetchedAt: now
+      fetchedAt: now,
+      cacheKey,
+      diagnostics: markDiagnostics(fresh.diagnostics, false)
     };
     return { entry, fromCache: false, cache: { ...cache, [key]: entry } };
   } catch (error) {
     if (cached) {
       return {
-        entry: {
+        entry: markDiagnosticsFromCache({
           ...cached,
           errors: [error instanceof Error ? error.message : String(error)]
-        },
+        }, true),
         fromCache: true,
         cache
       };
     }
     throw error;
   }
+}
+
+function markDiagnosticsFromCache(entry: CachedActivationEntry, fromCache: boolean): CachedActivationEntry {
+  return {
+    ...entry,
+    diagnostics: markDiagnostics(entry.diagnostics, fromCache)
+  };
+}
+
+function markDiagnostics(
+  diagnostics: CachedActivationEntry["diagnostics"] | undefined,
+  fromCache: boolean
+): CachedActivationEntry["diagnostics"] | undefined {
+  return diagnostics?.map((item) => ({ ...item, fromCache }));
 }

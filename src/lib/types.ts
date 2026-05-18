@@ -2,6 +2,8 @@ export type ActivationItemType = "directoryRole" | "azureRole" | "pimGroup";
 export type ActivationStatus = "eligible" | "active";
 export type SortMode = "name" | "lastUsed" | "activationCount" | "type" | "scope";
 export type TokenKind = "graph" | "azureManagement";
+export type AccessSetupTarget = ActivationItemType;
+export type AccessCapabilityStatus = "ready" | "needsPortalRefresh" | "limited";
 
 export interface UsageStats {
   activationCount: number;
@@ -84,11 +86,36 @@ export interface CachedActivationEntry {
   items: ActivationItem[];
   errors: string[];
   fetchedAt: number;
+  cacheKey?: string;
+  diagnostics?: AccessDiagnostic[];
 }
 
 export interface QuickPimDataCache {
   eligible?: CachedActivationEntry;
   active?: CachedActivationEntry;
+}
+
+export interface AccessDiagnostic {
+  target: AccessSetupTarget;
+  success: boolean;
+  checkedAt: string;
+  error?: string;
+  fromCache?: boolean;
+}
+
+export interface ReferenceValue {
+  name: string;
+  updatedAt: string;
+}
+
+export interface ReferenceDataCache {
+  version: 1;
+  directoryRoleDefinitions: Record<string, ReferenceValue>;
+  pimGroups: Record<string, ReferenceValue>;
+  azureRoleDefinitions: Record<string, ReferenceValue>;
+  azureSubscriptions: Record<string, ReferenceValue>;
+  scopes: Record<string, ReferenceValue>;
+  directoryScopes: Record<string, ReferenceValue>;
 }
 
 export interface QuickPimSettings {
@@ -104,6 +131,7 @@ export interface QuickPimSettings {
 
 export interface TokenStatusEntry {
   hasToken: boolean;
+  capturedAt?: number;
   tokenAge?: number;
   expiresAt?: string;
   expiresInMinutes?: number;

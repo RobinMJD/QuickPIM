@@ -16,6 +16,8 @@ import { assertFreshToken, decodeToken, makeTokenStatus } from "./lib/token";
 import type {
   ActivationItem,
   ActivationResponse,
+  AccessDiagnostic,
+  AccessSetupTarget,
   AzureRoleApi,
   DirectoryRoleDefinitionApi,
   DirectoryRoleApi,
@@ -23,6 +25,7 @@ import type {
   PimGroupApi,
   RoleManagementPolicyAssignmentApi,
   TicketInfo,
+  TokenKind,
   TokenStatus
 } from "./lib/types";
 
@@ -181,46 +184,79 @@ async function getTokenStatus(): Promise<TokenStatus> {
   };
 }
 
-async function getActivationItems(): Promise<{ items: ActivationItem[]; errors: string[] }> {
+async function getActivationItems(): Promise<{ items: ActivationItem[]; errors: string[]; diagnostics: AccessDiagnostic[] }> {
   const tokens = await getStoredTokens();
-  const errors: string[] = [];
-  const itemGroups = await Promise.allSettled([
-    tokens.graphToken ? getDirectoryRoles(tokens.graphToken) : Promise.resolve([]),
-    tokens.azureManagementToken ? getAzureRoles(tokens.azureManagementToken) : Promise.resolve([]),
-    tokens.graphToken ? getPimGroups(tokens.graphToken) : Promise.resolve([])
+  const results = await Promise.all([
+    fetchItemGroup("directoryRole", "graph", tokens.graphToken, getDirectoryRoles),
+    fetchItemGroup("azureRole", "azureManagement", tokens.azureManagementToken, getAzureRoles),
+    fetchItemGroup("pimGroup", "graph", tokens.graphToken, getPimGroups)
   ]);
 
-  const items: ActivationItem[] = [];
-  for (const result of itemGroups) {
-    if (result.status === "fulfilled") {
-      items.push(...result.value);
-    } else {
-      errors.push(sanitizeErrorMessage(result.reason));
-    }
-  }
-
-  return { items: dedupeItems(items), errors };
+  return {
+    items: dedupeItems(results.flatMap((result) => result.items)),
+    errors: results.flatMap((result) => result.error ? [result.error] : []),
+    diagnostics: results.map((result) => result.diagnostic)
+  };
 }
 
-async function getActiveItems(): Promise<{ items: ActivationItem[]; errors: string[] }> {
+async function getActiveItems(): Promise<{ items: ActivationItem[]; errors: string[]; diagnostics: AccessDiagnostic[] }> {
   const tokens = await getStoredTokens();
-  const errors: string[] = [];
-  const itemGroups = await Promise.allSettled([
-    tokens.graphToken ? getActiveDirectoryRoles(tokens.graphToken) : Promise.resolve([]),
-    tokens.azureManagementToken ? getActiveAzureRoles(tokens.azureManagementToken) : Promise.resolve([]),
-    tokens.graphToken ? getActivePimGroups(tokens.graphToken) : Promise.resolve([])
+  const results = await Promise.all([
+    fetchItemGroup("directoryRole", "graph", tokens.graphToken, getActiveDirectoryRoles),
+    fetchItemGroup("azureRole", "azureManagement", tokens.azureManagementToken, getActiveAzureRoles),
+    fetchItemGroup("pimGroup", "graph", tokens.graphToken, getActivePimGroups)
   ]);
 
-  const items: ActivationItem[] = [];
-  for (const result of itemGroups) {
-    if (result.status === "fulfilled") {
-      items.push(...result.value);
-    } else {
-      errors.push(sanitizeErrorMessage(result.reason));
-    }
+  return {
+    items: dedupeItems(results.flatMap((result) => result.items)),
+    errors: results.flatMap((result) => result.error ? [result.error] : []),
+    diagnostics: results.map((result) => result.diagnostic)
+  };
+}
+
+async function fetchItemGroup(
+  target: AccessSetupTarget,
+  tokenKind: TokenKind,
+  token: string | undefined,
+  fetcher: (token: string) => Promise<ActivationItem[]>
+): Promise<{ items: ActivationItem[]; error?: string; diagnostic: AccessDiagnostic }> {
+  const checkedAt = new Date().toISOString();
+  if (!token) {
+    return {
+      items: [],
+      error: tokenKind === "graph" ? "Graph token is missing." : "Azure Management token is missing.",
+      diagnostic: {
+        target,
+        success: false,
+        checkedAt,
+        error: tokenKind === "graph" ? "Graph token is missing." : "Azure Management token is missing."
+      }
+    };
   }
 
-  return { items: dedupeItems(items), errors };
+  try {
+    const items = await fetcher(token);
+    return {
+      items,
+      diagnostic: {
+        target,
+        success: true,
+        checkedAt
+      }
+    };
+  } catch (error) {
+    const sanitized = sanitizeErrorMessage(error);
+    return {
+      items: [],
+      error: sanitized,
+      diagnostic: {
+        target,
+        success: false,
+        checkedAt,
+        error: sanitized
+      }
+    };
+  }
 }
 
 async function getDirectoryRoles(graphToken: string): Promise<ActivationItem[]> {

@@ -13,17 +13,17 @@ QuickPIM is a local MV3 browser extension that captures Microsoft Graph and Azur
 - Expired or invalid stored tokens are cleared when detected.
 - Errors are redacted before being displayed or returned from the background worker.
 
-## Permissions And Messaging
+## Access And Messaging
 
 - Host permissions are limited to `https://graph.microsoft.com/*` and `https://management.azure.com/*`.
 - Extension pages use an explicit MV3 content security policy.
 - Background runtime messages are accepted only from this extension and are validated before privileged actions run.
-- The previous manual token injection path was removed; users can clear captured tokens from Settings.
+- Unsupported token injection paths are not exposed; users can clear captured tokens from Settings.
 
 ## Storage And Settings
 
 - Imported settings are normalized through length, type, range, and count limits.
-- Saved justifications, aliases, bundles, usage history, and preferences remain local to the browser profile.
+- Saved justifications, aliases, learned names, bundles, usage history, and preferences remain local to the browser profile.
 - Bundle and activation fields are bounded before being sent to Microsoft APIs.
 
 ## Dependency And Repository Hygiene

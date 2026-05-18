@@ -13,7 +13,8 @@ Original author: Daniel Bradley. This repository continues the original QuickPIM
 - Save reusable justifications and quickly reuse recent justifications.
 - Create bundles of roles and groups with optional default duration, justification, and ticket metadata.
 - Sort and filter by name, type, scope, last use, and activation count.
-- Manage aliases, bundles, justifications, preferences, and JSON import/export from the settings page.
+- Use Access Setup to open the right Microsoft portal pages when QuickPIM needs fresh portal tokens.
+- Manage aliases, bundles, justifications, learned names, preferences, and JSON import/export from the settings page.
 
 ## How It Works
 
@@ -54,7 +55,7 @@ The extension version is declared in both `package.json` and `public/manifest.js
 ## Usage
 
 1. Sign in to the Azure Portal or Microsoft Entra admin center.
-2. Navigate around briefly so Graph and Azure Management API requests are made and tokens are captured.
+2. Use Settings > Access Setup, or open the matching Entra/Azure PIM pages, so Graph and Azure Management API requests are made and tokens are captured.
 3. Open QuickPIM from the browser toolbar.
 4. Select roles or groups, choose a saved or recent justification, then activate.
 5. Open Settings to define aliases, saved justifications, bundles, and preferences.
@@ -64,6 +65,7 @@ The extension version is declared in both `package.json` and `public/manifest.js
 After building, load `dist/` and verify:
 
 - Graph and Azure token status appears in the popup header.
+- Access Setup opens only the portal pages needed for missing or limited feature areas.
 - Eligible Entra roles, Azure roles, and PIM groups display friendly names.
 - A single role/group activation submits successfully with justification and optional ticket info.
 - A saved bundle activates all available included roles/groups.
@@ -79,6 +81,7 @@ After building, load `dist/` and verify:
 ### v2.0.0
 
 - Adds visible versioning and original author attribution.
+- Adds portal-driven Access Setup and local learned-name fallbacks.
 - Narrows extension host permissions to Microsoft Graph and Azure Management.
 - Adds stricter token, runtime message, activation payload, and settings import validation.
 - Adds a settings About page with token-clearing controls and local privacy notes.

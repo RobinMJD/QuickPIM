@@ -1,27 +1,29 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../styles.css";
+import { buildAccessCapabilityItems, buildTokenCacheKey, getAccessSetupTargets, getPortalUrlsForTargets } from "../lib/access";
+import { loadDataCache, saveDataCache } from "../lib/cache";
 import {
   DEFAULT_SETTINGS,
   SETTINGS_KEY,
   createBundleId,
   getDisplayName,
   getUsage,
+  getScopeLabel,
   loadSettings,
   mergeSettings,
   saveSettings
 } from "../lib/settings";
 import {
-  buildPermissionStatus,
-  getMissingPermissionItems,
-  permissionDocsUrl,
-  permissionSetupPowerShell,
-  permissionSetupTutorial,
-  type PermissionStatusItem
-} from "../lib/permissions";
-import type { ActivationItem, QuickPimBundle, QuickPimSettings, SortMode, TokenStatus } from "../lib/types";
+  applyReferenceDataToItems,
+  clearReferenceData,
+  learnReferenceDataFromItems,
+  loadReferenceData,
+  saveReferenceData
+} from "../lib/referenceData";
+import type { AccessSetupTarget, ActivationItem, QuickPimBundle, QuickPimDataCache, QuickPimSettings, ReferenceDataCache, SortMode, TokenStatus } from "../lib/types";
 
-type SettingsTab = "about" | "permissions" | "aliases" | "justifications" | "bundles" | "preferences" | "data";
+type SettingsTab = "about" | "access" | "aliases" | "justifications" | "bundles" | "preferences" | "data";
 
 const ORIGINAL_AUTHOR = "Daniel Bradley";
 const REPOSITORY_URL = "https://github.com/RobinMJD/QuickPIM";
@@ -37,6 +39,8 @@ function SettingsApp() {
   const [settings, setSettings] = useState<QuickPimSettings>(DEFAULT_SETTINGS);
   const [items, setItems] = useState<ActivationItem[]>([]);
   const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
+  const [dataCache, setDataCache] = useState<QuickPimDataCache>({});
+  const [referenceData, setReferenceData] = useState<ReferenceDataCache | undefined>();
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [exportText, setExportText] = useState("");
@@ -56,18 +60,59 @@ function SettingsApp() {
   async function refresh() {
     setError("");
     try {
-      const [loadedSettings, loadedItems, loadedTokens] = await Promise.all([
+      const [loadedSettings, loadedItems, loadedTokens, loadedCache, loadedReferenceData] = await Promise.all([
         loadSettings(),
-        sendMessage<{ items: ActivationItem[]; errors: string[] }>({ action: "getActivationItems" }),
-        sendMessage<TokenStatus>({ action: "getTokenStatus" })
+        sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: any[] }>({ action: "getActivationItems" }),
+        sendMessage<TokenStatus>({ action: "getTokenStatus" }),
+        loadDataCache(),
+        loadReferenceData()
       ]);
+      const tokenCacheKey = buildTokenCacheKey(loadedTokens);
+      const nextCache: QuickPimDataCache = {
+        ...(loadedCache.active?.cacheKey === tokenCacheKey ? { active: loadedCache.active } : {}),
+        eligible: {
+          ...loadedItems,
+          fetchedAt: Date.now(),
+          cacheKey: tokenCacheKey
+        }
+      };
+      await saveDataCache(nextCache);
+      const nextReferenceData = learnReferenceDataFromItems(loadedReferenceData, loadedItems.items);
+      await saveReferenceData(nextReferenceData);
       setSettings(loadedSettings);
-      setItems(loadedItems.items);
+      setItems(applyDisplayData(loadedItems.items, loadedSettings, nextReferenceData));
       setTokenStatus(loadedTokens);
+      setDataCache(nextCache);
+      setReferenceData(nextReferenceData);
       setExportText(JSON.stringify(loadedSettings, null, 2));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     }
+  }
+
+  async function forceRefreshAccessData(tokens = tokenStatus) {
+    const latestTokens = tokens || await sendMessage<TokenStatus>({ action: "getTokenStatus" });
+    const tokenCacheKey = buildTokenCacheKey(latestTokens);
+    const [eligible, active] = await Promise.all([
+      sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: any[] }>({ action: "getActivationItems" }),
+      sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: any[] }>({ action: "getActiveItems" })
+    ]);
+    const fetchedAt = Date.now();
+    const nextCache: QuickPimDataCache = {
+      eligible: { ...eligible, fetchedAt, cacheKey: tokenCacheKey },
+      active: { ...active, fetchedAt, cacheKey: tokenCacheKey }
+    };
+    await saveDataCache(nextCache);
+    const nextReferenceData = learnReferenceDataFromItems(referenceData || await loadReferenceData(), [
+      ...eligible.items,
+      ...active.items
+    ]);
+    await saveReferenceData(nextReferenceData);
+    setTokenStatus(latestTokens);
+    setDataCache(nextCache);
+    setReferenceData(nextReferenceData);
+    setItems(applyDisplayData(eligible.items, settings, nextReferenceData));
+    setMessage("Access data refreshed.");
   }
 
   async function persist(next: QuickPimSettings, successMessage = "Settings saved.") {
@@ -85,6 +130,12 @@ function SettingsApp() {
       azureManagement: { hasToken: false }
     });
     setMessage("Captured tokens cleared.");
+  }
+
+  async function clearLearnedReferences() {
+    await clearReferenceData();
+    setReferenceData(undefined);
+    setMessage("Learned names cleared.");
   }
 
   function selectTab(nextTab: SettingsTab) {
@@ -114,7 +165,7 @@ function SettingsApp() {
         {message ? <p className="message">{message}</p> : null}
         <div className="settings-layout">
           <nav className="settings-nav">
-            {(["about", "permissions", "aliases", "justifications", "bundles", "preferences", "data"] as SettingsTab[]).map((item) => (
+            {(["about", "access", "aliases", "justifications", "bundles", "preferences", "data"] as SettingsTab[]).map((item) => (
               <button key={item} className={tab === item ? "active" : ""} onClick={() => selectTab(item)}>
                 {tabLabel(item)}
               </button>
@@ -122,10 +173,19 @@ function SettingsApp() {
           </nav>
           <div>
             {tab === "about" ? <AboutPanel tokenStatus={tokenStatus} onClearTokens={() => void clearCapturedTokens()} /> : null}
-            {tab === "permissions" ? <PermissionsPanel settings={settings} tokenStatus={tokenStatus} onSave={persist} /> : null}
-            {tab === "aliases" ? <AliasesPanel settings={settings} items={items} onSave={persist} /> : null}
+            {tab === "access" ? (
+              <AccessSetupPanel
+                settings={settings}
+                tokenStatus={tokenStatus}
+                dataCache={dataCache}
+                onSave={persist}
+                onRefreshAccessData={forceRefreshAccessData}
+                onClearReferenceData={clearLearnedReferences}
+              />
+            ) : null}
+            {tab === "aliases" ? <AliasesPanel settings={settings} items={items} referenceData={referenceData} onSave={persist} /> : null}
             {tab === "justifications" ? <JustificationsPanel settings={settings} onSave={persist} /> : null}
-            {tab === "bundles" ? <BundlesPanel settings={settings} items={items} onSave={persist} /> : null}
+            {tab === "bundles" ? <BundlesPanel settings={settings} items={items} referenceData={referenceData} onSave={persist} /> : null}
             {tab === "preferences" ? <PreferencesPanel settings={settings} onSave={persist} /> : null}
             {tab === "data" ? (
               <DataPanel
@@ -189,17 +249,24 @@ function AboutPanel({
   );
 }
 
-function PermissionsPanel({
+function AccessSetupPanel({
   settings,
   tokenStatus,
-  onSave
+  dataCache,
+  onSave,
+  onRefreshAccessData,
+  onClearReferenceData
 }: {
   settings: QuickPimSettings;
   tokenStatus: TokenStatus | null;
+  dataCache: QuickPimDataCache;
   onSave: (settings: QuickPimSettings, message?: string) => Promise<void>;
+  onRefreshAccessData: (tokens?: TokenStatus) => Promise<void>;
+  onClearReferenceData: () => Promise<void>;
 }) {
-  const permissionStatus = useMemo(() => buildPermissionStatus(tokenStatus), [tokenStatus]);
-  const missingPermissions = useMemo(() => getMissingPermissionItems(permissionStatus), [permissionStatus]);
+  const [isRunningSetup, setIsRunningSetup] = useState(false);
+  const accessStatus = useMemo(() => buildAccessCapabilityItems(tokenStatus, dataCache), [dataCache, tokenStatus]);
+  const setupTargets = useMemo(() => getAccessSetupTargets(accessStatus), [accessStatus]);
   const warningIgnored = Boolean(settings.preferences.permissionWarningIgnored);
 
   async function setIgnored(ignored: boolean) {
@@ -216,92 +283,139 @@ function PermissionsPanel({
     );
   }
 
+  async function runPortalSetup() {
+    const targets = setupTargets;
+    const urls = getPortalUrlsForTargets(targets);
+    for (const url of urls) {
+      if (chrome.tabs?.create) {
+        void chrome.tabs.create({ url });
+      } else {
+        window.open(url, "_blank", "noopener");
+      }
+    }
+
+    setIsRunningSetup(true);
+    try {
+      const latestTokens = await waitForPortalTokens(targets);
+      await onRefreshAccessData(latestTokens);
+    } finally {
+      setIsRunningSetup(false);
+    }
+  }
+
+  async function waitForPortalTokens(targets: AccessSetupTarget[]): Promise<TokenStatus> {
+    let latestTokens = tokenStatus || await sendMessage<TokenStatus>({ action: "getTokenStatus" });
+    const deadline = Date.now() + 90_000;
+    while (Date.now() < deadline) {
+      latestTokens = await sendMessage<TokenStatus>({ action: "getTokenStatus" });
+      if (targets.every((target) => hasRequiredPortalToken(target, latestTokens))) {
+        return latestTokens;
+      }
+      await delay(3000);
+    }
+    return latestTokens;
+  }
+
   return (
     <section className="panel permissions-panel">
       <div className="panel-title-row">
         <div>
-          <h2>Permissions</h2>
+          <h2>Access Setup</h2>
           <p className="muted">
-            {missingPermissions.length
-              ? `${missingPermissions.length} right(s) missing. Related QuickPIM features are limited until the token or account has them.`
-              : "All required QuickPIM rights are visible in the currently captured tokens."}
+            {setupTargets.length
+              ? `${setupTargets.length} area(s) need a portal refresh or are limited by the captured portal token.`
+              : "QuickPIM can use the currently captured portal tokens for all feature areas."}
           </p>
         </div>
         <button className={`btn ${warningIgnored ? "" : "subtle"}`} onClick={() => void setIgnored(!warningIgnored)}>
-          {warningIgnored ? "Show popup warning" : "Ignore popup warning"}
+          {warningIgnored ? "Show access warning" : "Ignore access warning"}
         </button>
       </div>
 
+      <div className="button-row" style={{ marginBottom: 12 }}>
+        <button className="btn primary" onClick={() => void runPortalSetup()} disabled={isRunningSetup || !setupTargets.length}>
+          {isRunningSetup ? "Checking portal access..." : "Open missing portal pages"}
+        </button>
+        <button className="btn" onClick={() => void onRefreshAccessData()}>
+          Recheck now
+        </button>
+        <button className="btn danger" onClick={() => void onClearReferenceData()}>
+          Clear learned names
+        </button>
+      </div>
+      <p className="muted">
+        QuickPIM only uses tokens captured from Microsoft portal pages. If a page asks you to sign in or load PIM data, complete that
+        step in the opened tab, then return here.
+      </p>
+
       <div className="permission-list">
-        {permissionStatus.map((item) => (
-          <PermissionRow item={item} key={item.id} />
+        {accessStatus.map((item) => (
+          <AccessStatusRow item={item} key={item.target} />
         ))}
       </div>
 
       <div className="panel">
         <h3>Quick Tutorial</h3>
         <ol className="tutorial-list">
-          {permissionSetupTutorial.map((step) => (
-            <li key={step}>{step}</li>
-          ))}
+          <li>Use Open missing portal pages to open the Microsoft pages that normally request the needed Graph or Azure tokens.</li>
+          <li>Let the portal pages finish loading. Switch to them if sign-in, tenant selection, or page consent is required.</li>
+          <li>Return to QuickPIM and use Recheck now if the automatic refresh has not picked up the new portal token yet.</li>
+          <li>QuickPIM keeps learned role, group, subscription, and scope names locally so old friendly names can still be displayed later.</li>
         </ol>
-        <p className="muted">
-          Microsoft Graph permission reference:{" "}
-          <a href={permissionDocsUrl} target="_blank" rel="noreferrer">
-            {permissionDocsUrl}
-          </a>
-        </p>
-      </div>
-
-      <div className="panel">
-        <h3>Append Missing Graph Permissions</h3>
-        <p className="muted">
-          This example appends the Graph delegated scopes used by QuickPIM to a custom app registration. It keeps existing API
-          permissions and still requires admin consent afterwards.
-        </p>
-        <pre className="code-box permission-code">{permissionSetupPowerShell}</pre>
       </div>
     </section>
   );
 }
 
-function PermissionRow({ item }: { item: PermissionStatusItem }) {
+function AccessStatusRow({ item }: { item: ReturnType<typeof buildAccessCapabilityItems>[number] }) {
   return (
-    <article className={`permission-row ${item.isPresent ? "ok" : "missing"}`}>
+    <article className={`permission-row ${item.status === "ready" ? "ok" : "missing"}`}>
       <div className="permission-row-header">
-        <span className={`permission-state ${item.isPresent ? "ok" : "missing"}`}>{item.isPresent ? "Present" : "Missing"}</span>
+        <span className={`permission-state ${item.status === "ready" ? "ok" : "missing"}`}>{statusLabel(item.status)}</span>
         <div>
-          <h3>{item.name}</h3>
-          <p>{item.category === "graph" ? "Microsoft Graph" : "Azure Management"}</p>
+          <h3>{item.label}</h3>
+          <p>{item.target === "azureRole" ? "Azure Management portal token" : "Microsoft Graph portal token"}</p>
         </div>
       </div>
       <div className="permission-detail-grid">
         <div>
-          <strong>Required</strong>
-          <p>{item.requiredAnyOf.join(" or ")}</p>
+          <strong>Status</strong>
+          <p>{item.detail}</p>
         </div>
         <div>
-          <strong>{item.isPresent ? "Detected" : "What will not work"}</strong>
-          <p>{item.isPresent ? item.matchedBy : item.missingImpact}</p>
+          <strong>{item.status === "ready" ? "Last success" : "What is limited"}</strong>
+          <p>{item.status === "ready" ? item.lastSuccessAt || "Token is available." : item.lastError || "Open the matching portal page to refresh access."}</p>
         </div>
       </div>
-      {item.note ? <p className="permission-note">{item.note}</p> : null}
-      {item.docsUrl ? (
-        <a className="permission-doc-link" href={item.docsUrl} target="_blank" rel="noreferrer">
-          Microsoft documentation
-        </a>
-      ) : null}
     </article>
   );
+}
+
+function statusLabel(status: ReturnType<typeof buildAccessCapabilityItems>[number]["status"]): string {
+  if (status === "ready") return "Ready";
+  if (status === "limited") return "Limited";
+  return "Needs portal refresh";
+}
+
+function hasRequiredPortalToken(target: AccessSetupTarget, tokenStatus: TokenStatus): boolean {
+  return target === "azureRole"
+    ? Boolean(tokenStatus.azureManagement.hasToken && !tokenStatus.azureManagement.isExpired)
+    : Boolean(tokenStatus.graph.hasToken && !tokenStatus.graph.isExpired);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function AliasesPanel({
   settings,
   items,
+  referenceData,
   onSave
 }: {
   settings: QuickPimSettings;
   items: ActivationItem[];
+  referenceData?: ReferenceDataCache;
   onSave: (settings: QuickPimSettings, message?: string) => Promise<void>;
 }) {
   const [itemId, setItemId] = useState("");
@@ -336,7 +450,7 @@ function AliasesPanel({
             <option value="">Choose an eligible item</option>
             {items.map((item) => (
               <option value={item.id} key={item.id}>
-                {item.sourceName} / {item.scopeLabel}
+                {getDisplayName(item, settings, referenceData)} / {getScopeLabel(item, referenceData)}
               </option>
             ))}
           </select>
@@ -441,10 +555,12 @@ function JustificationsPanel({
 function BundlesPanel({
   settings,
   items,
+  referenceData,
   onSave
 }: {
   settings: QuickPimSettings;
   items: ActivationItem[];
+  referenceData?: ReferenceDataCache;
   onSave: (settings: QuickPimSettings, message?: string) => Promise<void>;
 }) {
   const [name, setName] = useState("");
@@ -453,7 +569,10 @@ function BundlesPanel({
   const [justification, setJustification] = useState("");
   const [ticketSystem, setTicketSystem] = useState("");
   const [ticketNumber, setTicketNumber] = useState("");
-  const sortedItems = useMemo(() => [...items].sort((a, b) => a.displayName.localeCompare(b.displayName)), [items]);
+  const sortedItems = useMemo(
+    () => [...items].sort((a, b) => getDisplayName(a, settings, referenceData).localeCompare(getDisplayName(b, settings, referenceData))),
+    [items, referenceData, settings]
+  );
 
   async function saveBundle() {
     if (!name.trim() || !selectedItemIds.size) return;
@@ -513,9 +632,9 @@ function BundlesPanel({
           <label className="checkbox-option" key={item.id}>
             <input type="checkbox" checked={selectedItemIds.has(item.id)} onChange={() => toggle(item.id)} />
             <span>
-              <strong>{getDisplayName(item, settings)}</strong>
+              <strong>{getDisplayName(item, settings, referenceData)}</strong>
               <br />
-              <span className="muted">{item.scopeLabel}</span>
+              <span className="muted">{getScopeLabel(item, referenceData)}</span>
             </span>
           </label>
         ))}
@@ -658,7 +777,7 @@ function DataPanel({
 function tabLabel(tab: SettingsTab): string {
   const labels: Record<SettingsTab, string> = {
     about: "About",
-    permissions: "Permissions",
+    access: "Access Setup",
     aliases: "Aliases",
     justifications: "Justifications",
     bundles: "Bundles",
@@ -670,10 +789,25 @@ function tabLabel(tab: SettingsTab): string {
 
 function tabFromHash(): SettingsTab {
   const value = window.location.hash.replace("#", "");
-  if (["about", "permissions", "aliases", "justifications", "bundles", "preferences", "data"].includes(value)) {
+  if (value === "permissions") {
+    return "access";
+  }
+  if (["about", "access", "aliases", "justifications", "bundles", "preferences", "data"].includes(value)) {
     return value as SettingsTab;
   }
   return "aliases";
+}
+
+function applyDisplayData(
+  items: ActivationItem[],
+  settings: QuickPimSettings,
+  referenceData: ReferenceDataCache
+): ActivationItem[] {
+  return applyReferenceDataToItems(items, referenceData).map((item) => ({
+    ...item,
+    displayName: getDisplayName(item, settings, referenceData),
+    scopeLabel: getScopeLabel(item, referenceData)
+  }));
 }
 
 async function sendMessage<T>(message: Record<string, unknown>): Promise<T> {

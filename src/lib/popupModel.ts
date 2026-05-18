@@ -142,10 +142,10 @@ function isTokenExpiryMessage(message: string): boolean {
 
 function formatPermissionMessage(missingScopes: string | undefined): string {
   if (missingScopes?.includes("AzureADGroup")) {
-    return "PIM Groups permissions missing. Add Graph PIM group read/write scopes in Entra consent.";
+    return "PIM Groups access is limited in the captured portal token. Use Access Setup to refresh portal access.";
   }
 
-  return `Microsoft Graph permission missing: ${missingScopes || "required scope"}.`;
+  return `Microsoft Graph access is limited in the captured portal token${missingScopes ? `: ${missingScopes}` : "."}`;
 }
 
 function parseJsonMessage(message: string): Record<string, unknown> | undefined {

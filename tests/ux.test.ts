@@ -86,6 +86,30 @@ describe("popup cache helpers", () => {
     expect(result.fromCache).toBe(true);
     expect(result.entry.errors).toEqual([]);
   });
+
+  test("invalidates cached data when the captured token context changes", async () => {
+    const now = Date.parse("2026-05-18T12:10:00.000Z");
+    const cached = {
+      items: [directoryRole],
+      errors: [],
+      fetchedAt: now - 60_000,
+      cacheKey: "graph:old|azure:old"
+    };
+
+    const result = await getDataWithCache(
+      "eligible",
+      { eligible: cached },
+      DEFAULT_ELIGIBLE_CACHE_TTL_MS,
+      false,
+      async () => ({ items: [azureRole], errors: [] }),
+      now,
+      "graph:new|azure:old"
+    );
+
+    expect(result.fromCache).toBe(false);
+    expect(result.entry.items).toEqual([azureRole]);
+    expect(result.entry.cacheKey).toBe("graph:new|azure:old");
+  });
 });
 
 describe("popup model helpers", () => {
@@ -145,7 +169,7 @@ describe("popup model helpers", () => {
     ]);
 
     expect(warning).toEqual([
-      "PIM Groups permissions missing. Add Graph PIM group read/write scopes in Entra consent.",
+      "PIM Groups access is limited in the captured portal token. Use Access Setup to refresh portal access.",
       "Using cached data from 2 min ago."
     ]);
   });

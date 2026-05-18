@@ -3,10 +3,12 @@ import type {
   ActivationItem,
   BundleExpansion,
   QuickPimBundle,
+  ReferenceDataCache,
   QuickPimSettings,
   SortMode,
   TicketInfo
 } from "./types";
+import { getReferenceDisplayName, getReferenceScopeLabel } from "./referenceData";
 
 export const SETTINGS_KEY = "quickPimSettings.v1";
 const MAX_HISTORY_ENTRIES = 50;
@@ -62,9 +64,17 @@ export async function saveSettings(settings: QuickPimSettings): Promise<void> {
   await chrome.storage.local.set({ [SETTINGS_KEY]: mergeSettings(settings) });
 }
 
-export function getDisplayName(item: ActivationItem, settings: QuickPimSettings): string {
+export function getDisplayName(
+  item: ActivationItem,
+  settings: QuickPimSettings,
+  referenceData?: ReferenceDataCache
+): string {
   const alias = settings.aliasesByItemId[item.id]?.trim();
-  return alias || item.displayName || item.sourceName || "Unknown";
+  return alias || getReferenceDisplayName(item, referenceData) || item.displayName || item.sourceName || "Unknown";
+}
+
+export function getScopeLabel(item: ActivationItem, referenceData?: ReferenceDataCache): string {
+  return getReferenceScopeLabel(item, referenceData) || item.scopeLabel || "Scope";
 }
 
 export function getUsage(item: ActivationItem, settings: QuickPimSettings) {
@@ -74,30 +84,31 @@ export function getUsage(item: ActivationItem, settings: QuickPimSettings) {
 export function sortItems(
   items: ActivationItem[],
   settings: QuickPimSettings,
-  sortMode: SortMode
+  sortMode: SortMode,
+  referenceData?: ReferenceDataCache
 ): ActivationItem[] {
   const sortable = [...items];
   return sortable.sort((a, b) => {
     if (sortMode === "lastUsed") {
       const aDate = getUsage(a, settings).lastUsedAt || "";
       const bDate = getUsage(b, settings).lastUsedAt || "";
-      return bDate.localeCompare(aDate) || getDisplayName(a, settings).localeCompare(getDisplayName(b, settings));
+      return bDate.localeCompare(aDate) || getDisplayName(a, settings, referenceData).localeCompare(getDisplayName(b, settings, referenceData));
     }
 
     if (sortMode === "activationCount") {
       const diff = getUsage(b, settings).activationCount - getUsage(a, settings).activationCount;
-      return diff || getDisplayName(a, settings).localeCompare(getDisplayName(b, settings));
+      return diff || getDisplayName(a, settings, referenceData).localeCompare(getDisplayName(b, settings, referenceData));
     }
 
     if (sortMode === "type") {
-      return a.type.localeCompare(b.type) || getDisplayName(a, settings).localeCompare(getDisplayName(b, settings));
+      return a.type.localeCompare(b.type) || getDisplayName(a, settings, referenceData).localeCompare(getDisplayName(b, settings, referenceData));
     }
 
     if (sortMode === "scope") {
-      return a.scopeLabel.localeCompare(b.scopeLabel) || getDisplayName(a, settings).localeCompare(getDisplayName(b, settings));
+      return getScopeLabel(a, referenceData).localeCompare(getScopeLabel(b, referenceData)) || getDisplayName(a, settings, referenceData).localeCompare(getDisplayName(b, settings, referenceData));
     }
 
-    return getDisplayName(a, settings).localeCompare(getDisplayName(b, settings));
+    return getDisplayName(a, settings, referenceData).localeCompare(getDisplayName(b, settings, referenceData));
   });
 }
 

@@ -10,6 +10,12 @@ import {
   saveDataCache
 } from "../lib/cache";
 import {
+  buildAccessCapabilityItems,
+  buildTokenCacheKey,
+  getAccessSetupTargets,
+  type AccessCapabilityItem
+} from "../lib/access";
+import {
   coerceDurationForItems,
   formatLoadMessages,
   getActivationRequirements,
@@ -22,26 +28,29 @@ import {
   type RoleTab
 } from "../lib/popupModel";
 import {
-  buildPermissionStatus,
-  getMissingPermissionItems,
-  shouldShowPermissionWarning
-} from "../lib/permissions";
-import {
   DEFAULT_SETTINGS,
   addRecentJustification,
   addSavedJustification,
   expandBundle,
   getDisplayName,
+  getScopeLabel,
   getUsage,
   loadSettings,
   recordActivations,
   saveSettings,
   sortItems
 } from "../lib/settings";
+import {
+  applyReferenceDataToItems,
+  learnReferenceDataFromItems,
+  loadReferenceData,
+  saveReferenceData
+} from "../lib/referenceData";
 import type {
   ActivationItem,
   ActivationResponse,
   QuickPimBundle,
+  ReferenceDataCache,
   QuickPimSettings,
   SortMode,
   TicketInfo,
@@ -61,6 +70,8 @@ function PopupApp() {
   const [activeItems, setActiveItems] = useState<ActivationItem[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
+  const [referenceData, setReferenceData] = useState<ReferenceDataCache | undefined>();
+  const [accessCapabilities, setAccessCapabilities] = useState<AccessCapabilityItem[]>([]);
   const [search, setSearch] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("name");
   const [durationHours, setDurationHours] = useState(DEFAULT_SETTINGS.preferences.defaultDurationHours);
@@ -88,11 +99,10 @@ function PopupApp() {
   );
   const requirements = useMemo(() => getActivationRequirements(selectedItems), [selectedItems]);
   const durationOptions = useMemo(() => getDurationOptions(selectedItems), [selectedItems]);
-  const permissionStatus = useMemo(() => buildPermissionStatus(tokenStatus), [tokenStatus]);
-  const missingPermissions = useMemo(() => getMissingPermissionItems(permissionStatus), [permissionStatus]);
+  const accessSetupTargets = useMemo(() => getAccessSetupTargets(accessCapabilities), [accessCapabilities]);
   const showPermissionWarning = useMemo(
-    () => tokenStatus !== null && shouldShowPermissionWarning(permissionStatus, settings),
-    [permissionStatus, settings, tokenStatus]
+    () => tokenStatus !== null && !settings.preferences.permissionWarningIgnored && accessSetupTargets.length > 0,
+    [accessSetupTargets.length, settings, tokenStatus]
   );
 
   useEffect(() => {
@@ -105,45 +115,56 @@ function PopupApp() {
     const term = search.trim().toLowerCase();
     const filtered = eligibleItems.filter((item) => {
       const matchesType = item.type === tab;
-      const name = getDisplayName(item, settings).toLowerCase();
-      const scope = item.scopeLabel.toLowerCase();
+      const name = getDisplayName(item, settings, referenceData).toLowerCase();
+      const scope = getScopeLabel(item, referenceData).toLowerCase();
       return matchesType && (!term || name.includes(term) || scope.includes(term));
     });
-    return sortItems(filtered, settings, sortMode);
-  }, [eligibleItems, search, settings, sortMode, tab]);
+    return sortItems(filtered, settings, sortMode, referenceData);
+  }, [eligibleItems, referenceData, search, settings, sortMode, tab]);
 
   async function refresh(options: { force: boolean }) {
     setIsLoading(true);
     setError("");
     try {
-      const [loadedSettings, loadedTokens, currentCache] = await Promise.all([
+      const [loadedSettings, loadedTokens, currentCache, loadedReferenceData] = await Promise.all([
         loadSettings(),
         sendMessage<TokenStatus>({ action: "getTokenStatus" }),
-        loadDataCache()
+        loadDataCache(),
+        loadReferenceData()
       ]);
+      const now = Date.now();
+      const tokenCacheKey = buildTokenCacheKey(loadedTokens);
       const { entry: eligible, fromCache: eligibleFromCache, cache: nextEligibleCache } = await getDataWithCache(
         "eligible",
         currentCache,
         DEFAULT_ELIGIBLE_CACHE_TTL_MS,
         options.force,
-        () => sendMessage<{ items: ActivationItem[]; errors: string[] }>({ action: "getActivationItems" })
+        () => sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: any[] }>({ action: "getActivationItems" }),
+        now,
+        tokenCacheKey
       );
       const { entry: active, fromCache: activeFromCache, cache: nextCache } = await getDataWithCache(
         "active",
         nextEligibleCache,
         DEFAULT_ACTIVE_CACHE_TTL_MS,
         options.force,
-        () => sendMessage<{ items: ActivationItem[]; errors: string[] }>({ action: "getActiveItems" })
+        () => sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: any[] }>({ action: "getActiveItems" }),
+        now,
+        tokenCacheKey
       );
 
       if (!eligibleFromCache || !activeFromCache) {
         await saveDataCache(nextCache);
       }
+      const nextReferenceData = learnReferenceDataFromItems(loadedReferenceData, [...eligible.items, ...active.items]);
+      await saveReferenceData(nextReferenceData);
 
       setSettings(loadedSettings);
       setTokenStatus(loadedTokens);
-      setEligibleItems(applyAliases(eligible.items, loadedSettings));
-      setActiveItems(applyAliases(active.items, loadedSettings));
+      setReferenceData(nextReferenceData);
+      setAccessCapabilities(buildAccessCapabilityItems(loadedTokens, nextCache));
+      setEligibleItems(applyDisplayData(eligible.items, loadedSettings, nextReferenceData));
+      setActiveItems(applyDisplayData(active.items, loadedSettings, nextReferenceData));
       const cacheMessage =
         eligibleFromCache && activeFromCache
           ? `Using cached data from ${formatCacheAge(Math.min(eligible.fetchedAt, active.fetchedAt))}.`
@@ -247,7 +268,7 @@ function PopupApp() {
   }
 
   function openPermissionDetails() {
-    const url = chrome.runtime.getURL("settings.html#permissions");
+    const url = chrome.runtime.getURL("settings.html#access");
     if (chrome.tabs?.create) {
       void chrome.tabs.create({ url });
     } else {
@@ -298,7 +319,8 @@ function PopupApp() {
 
       {showPermissionWarning ? (
         <PermissionWarningBanner
-          missingCount={missingPermissions.length}
+          missingCount={accessSetupTargets.length}
+          onFix={openPermissionDetails}
           onDetails={openPermissionDetails}
           onIgnore={() => void ignorePermissionWarning()}
         />
@@ -346,6 +368,7 @@ function PopupApp() {
             <RoleList
               items={visibleEligibleItems}
               settings={settings}
+              referenceData={referenceData}
               selectedIds={selectedIds}
               onToggle={toggleSelected}
             />
@@ -372,7 +395,7 @@ function PopupApp() {
 
       {tab === "active" ? (
         <section className="content">
-          <RoleList items={sortItems(activeItems, settings, "name")} settings={settings} selectedIds={new Set()} readonly />
+          <RoleList items={sortItems(activeItems, settings, "name", referenceData)} settings={settings} referenceData={referenceData} selectedIds={new Set()} readonly />
         </section>
       ) : null}
 
@@ -413,21 +436,26 @@ function PopupApp() {
 
 function PermissionWarningBanner({
   missingCount,
+  onFix,
   onDetails,
   onIgnore
 }: {
   missingCount: number;
+  onFix: () => void;
   onDetails: () => void;
   onIgnore: () => void;
 }) {
   return (
     <section className="permission-banner" role="status">
       <div>
-        <strong>Some QuickPIM features are limited.</strong>
-        <p>{missingCount} required permission{missingCount === 1 ? "" : "s"} missing or not currently visible in the captured tokens.</p>
+        <strong>Some QuickPIM data is missing or stale.</strong>
+        <p>{missingCount} area{missingCount === 1 ? "" : "s"} need portal refresh or have limited API access.</p>
       </div>
       <div className="button-row nowrap">
-        <button className="btn primary" onClick={onDetails}>
+        <button className="btn primary" onClick={onFix}>
+          Fix access
+        </button>
+        <button className="btn" onClick={onDetails}>
           Details
         </button>
         <button className="btn subtle" onClick={onIgnore}>
@@ -454,12 +482,14 @@ function LoadingState() {
 function RoleList({
   items,
   settings,
+  referenceData,
   selectedIds,
   onToggle,
   readonly = false
 }: {
   items: ActivationItem[];
   settings: QuickPimSettings;
+  referenceData?: ReferenceDataCache;
   selectedIds: Set<string>;
   onToggle?: (itemId: string) => void;
   readonly?: boolean;
@@ -476,10 +506,10 @@ function RoleList({
         const body = (
           <>
             <div>
-              <p className="role-title">{getDisplayName(item, settings)}</p>
+              <p className="role-title">{getDisplayName(item, settings, referenceData)}</p>
               <div className="role-meta">
                 <span className={`badge ${item.type}`}>{typeLabel(item.type)}</span>
-                <span>{item.scopeLabel}</span>
+                <span>{getScopeLabel(item, referenceData)}</span>
                 <span>{usage.activationCount} activations</span>
                 {usage.lastUsedAt ? <span>last {new Date(usage.lastUsedAt).toLocaleDateString()}</span> : null}
               </div>
@@ -618,8 +648,16 @@ function EmptyState({ text }: { text: string }) {
   return <div className="empty-state">{text}</div>;
 }
 
-function applyAliases(items: ActivationItem[], settings: QuickPimSettings): ActivationItem[] {
-  return items.map((item) => ({ ...item, displayName: getDisplayName(item, settings) }));
+function applyDisplayData(
+  items: ActivationItem[],
+  settings: QuickPimSettings,
+  referenceData: ReferenceDataCache
+): ActivationItem[] {
+  return applyReferenceDataToItems(items, referenceData).map((item) => ({
+    ...item,
+    displayName: getDisplayName(item, settings, referenceData),
+    scopeLabel: getScopeLabel(item, referenceData)
+  }));
 }
 
 function typeLabel(type: ActivationItem["type"]) {

@@ -19,6 +19,7 @@ export function makeTokenStatus(
 
   return {
     hasToken: true,
+    capturedAt: timestamp,
     tokenAge,
     expiresAt: expiresAtMs === undefined ? undefined : new Date(expiresAtMs).toISOString(),
     expiresInMinutes,
