@@ -218,18 +218,17 @@ async function getActiveItems(): Promise<{ items: ActivationItem[]; errors: stri
 async function getDirectoryRoles(graphToken: string): Promise<ActivationItem[]> {
   assertFreshToken(graphToken, "graph");
   const principalId = requirePrincipalId(graphToken);
+  const query = new URLSearchParams({
+    "$filter": `principalId eq '${principalId}'`,
+    "$expand": "roleDefinition"
+  });
   const roles = await fetchAllPages<DirectoryRoleApi>(
-    `https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilitySchedules?$filter=principalId eq '${principalId}'`,
+    `https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilitySchedules?${query.toString()}`,
     graphToken
   );
-  const definitions = await getDirectoryRoleDefinitions(graphToken);
+  const definitions = await getDirectoryRoleDefinitionsBestEffort(graphToken);
 
-  return roles.map((role) =>
-    normalizeDirectoryRole({
-      ...role,
-      roleName: role.roleDefinitionId ? definitions[role.roleDefinitionId] : role.roleName
-    })
-  );
+  return roles.map((role) => normalizeDirectoryRole(withDirectoryRoleDefinitionName(role, definitions)));
 }
 
 async function getDirectoryRoleDefinitions(graphToken: string): Promise<Record<string, string>> {
@@ -238,6 +237,23 @@ async function getDirectoryRoleDefinitions(graphToken: string): Promise<Record<s
     graphToken
   );
   return Object.fromEntries(roles.filter((role) => role.id && role.displayName).map((role) => [role.id!, role.displayName!]));
+}
+
+async function getDirectoryRoleDefinitionsBestEffort(graphToken: string): Promise<Record<string, string>> {
+  try {
+    return await getDirectoryRoleDefinitions(graphToken);
+  } catch (error) {
+    console.warn("QuickPIM could not resolve directory role definitions:", error);
+    return {};
+  }
+}
+
+function withDirectoryRoleDefinitionName(role: DirectoryRoleApi, definitions: Record<string, string>): DirectoryRoleApi {
+  const roleDefinitionId = role.roleDefinitionId || role.roleDefinition?.id || role.id || "";
+  return {
+    ...role,
+    roleName: role.roleName || definitions[roleDefinitionId]
+  };
 }
 
 async function getPimGroups(graphToken: string): Promise<ActivationItem[]> {
@@ -310,7 +326,7 @@ async function getActiveDirectoryRoles(graphToken: string): Promise<ActivationIt
     "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentScheduleRequests/filterByCurrentUser(on='principal')",
     graphToken
   );
-  const definitions = await getDirectoryRoleDefinitions(graphToken);
+  const definitions = await getDirectoryRoleDefinitionsBestEffort(graphToken);
   const now = Date.now();
 
   return roles
@@ -322,7 +338,10 @@ async function getActiveDirectoryRoles(graphToken: string): Promise<ActivationIt
       return { role, endTime };
     })
     .filter(({ endTime }) => !endTime || endTime > now)
-    .map(({ role }) => ({ ...normalizeDirectoryRole({ ...role, roleName: definitions[role.roleDefinitionId || ""] }), status: "active" }));
+    .map(({ role }) => ({
+      ...normalizeDirectoryRole(withDirectoryRoleDefinitionName(role, definitions)),
+      status: "active" as const
+    }));
 }
 
 async function getActiveAzureRoles(azureManagementToken: string): Promise<ActivationItem[]> {
@@ -415,7 +434,8 @@ async function activateItems(
   if (!items.length) {
     throw new Error("Select at least one item to activate.");
   }
-  if (!justification.trim()) {
+  const requiresJustification = items.some((item) => item.activationRequirements?.justification !== false);
+  if (requiresJustification && !justification.trim()) {
     throw new Error("A justification is required.");
   }
   if (durationHours <= 0) {

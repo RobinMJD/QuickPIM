@@ -7,10 +7,13 @@ import {
 } from "../src/lib/cache";
 import {
   ENTRA_PORTAL_URLS,
+  formatLoadMessages,
   getActivationRequirements,
+  getDurationOptions,
   getPortalUrlForTab,
   tokenStatusText
 } from "../src/lib/popupModel";
+import { normalizeDirectoryRole } from "../src/lib/pim";
 import type { ActivationItem } from "../src/lib/types";
 
 const directoryRole: ActivationItem = {
@@ -87,5 +90,35 @@ describe("popup model helpers", () => {
       needsJustification: true,
       needsTicket: true
     });
+  });
+
+  test("formats raw Graph permission JSON into readable warnings", () => {
+    const warning = formatLoadMessages([
+      '{"errorCode":"PermissionScopeNotGranted","message":"Authorization failed due to missing permission scope PrivilegedAssignmentSchedule.Read.AzureADGroup,PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup","localizedMessage":"[]"}',
+      "Using cached data from 2 min ago."
+    ]);
+
+    expect(warning).toEqual([
+      "Microsoft Graph permission missing: PrivilegedAssignmentSchedule.Read.AzureADGroup, PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup.",
+      "Using cached data from 2 min ago."
+    ]);
+  });
+
+  test("uses expanded directory role names before falling back to role definition ids", () => {
+    expect(
+      normalizeDirectoryRole({
+        roleDefinitionId: "968ca2cf-d644-4258-8311-65ba3a692b96",
+        principalId: "user-1",
+        roleDefinition: {
+          displayName: "Agent ID Administrator"
+        }
+      }).displayName
+    ).toBe("Agent ID Administrator");
+  });
+
+  test("uses duration labels instead of localized fractional numeric text", () => {
+    expect(getDurationOptions()[0]).toEqual({ value: 0.5, label: "30 minutes" });
+    expect(getDurationOptions().find((option) => option.value === 1)?.label).toBe("1 hour");
+    expect(getDurationOptions().find((option) => option.value === 2)?.label).toBe("2 hours");
   });
 });

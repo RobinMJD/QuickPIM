@@ -18,7 +18,7 @@ export function durationHoursToIso(durationHours: number): string {
 export function normalizeDirectoryRole(role: DirectoryRoleApi): DirectoryRoleItem {
   const roleDefinitionId = role.roleDefinitionId || role.id || "unknown-role";
   const directoryScopeId = role.directoryScopeId || "/";
-  const roleName = role.roleName || role.roleDefinitionDisplayName || roleDefinitionId;
+  const roleName = role.roleDefinition?.displayName || role.roleName || role.roleDefinitionDisplayName || roleDefinitionId;
 
   return {
     id: `directoryRole:${roleDefinitionId}:${directoryScopeId}`,

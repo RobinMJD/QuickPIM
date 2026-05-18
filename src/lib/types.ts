@@ -146,6 +146,11 @@ export interface DirectoryRoleApi {
   directoryScopeId?: string;
   roleName?: string;
   roleDefinitionDisplayName?: string;
+  roleDefinition?: {
+    id?: string;
+    displayName?: string;
+    templateId?: string;
+  };
 }
 
 export interface AzureRoleApi {

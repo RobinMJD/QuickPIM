@@ -25,11 +25,36 @@ export function tokenStatusText(label: string, status: TokenStatusEntry | undefi
   }
 
   if (status.isExpired) {
-    return `${label} token expired, refresh from the portal`;
+    return `${label} token expired. Refresh in portal.`;
   }
 
   const age = status.tokenAge ?? 0;
   return `${label} token active, captured ${age} min ago`;
+}
+
+export function formatLoadMessages(messages: string[]): string[] {
+  const seen = new Set<string>();
+  return messages
+    .map((message) => formatLoadMessage(message))
+    .filter((message) => {
+      if (!message || seen.has(message)) {
+        return false;
+      }
+      seen.add(message);
+      return true;
+    });
+}
+
+export function getDurationOptions(): Array<{ value: number; label: string }> {
+  return [
+    { value: 0.5, label: "30 minutes" },
+    { value: 1, label: "1 hour" },
+    { value: 2, label: "2 hours" },
+    { value: 4, label: "4 hours" },
+    { value: 8, label: "8 hours" },
+    { value: 12, label: "12 hours" },
+    { value: 24, label: "24 hours" }
+  ];
 }
 
 export function tokenStatusTone(status: TokenStatusEntry | undefined): "ok" | "warn" {
@@ -52,4 +77,69 @@ export function tabLabel(tab: PopupTab): string {
     bundles: "Bundles"
   };
   return labels[tab];
+}
+
+function formatLoadMessage(message: string): string {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const parsed = parseJsonMessage(trimmed);
+  const messageText = getParsedMessageText(parsed) || trimmed;
+  const missingScopes = extractMissingPermissionScopes(messageText) || extractMissingPermissionScopes(trimmed);
+  const errorCode = typeof parsed?.errorCode === "string" ? parsed.errorCode : undefined;
+
+  if (missingScopes || errorCode === "PermissionScopeNotGranted" || trimmed.includes("PermissionScopeNotGranted")) {
+    return `Microsoft Graph permission missing: ${missingScopes || "required scope"}.`;
+  }
+
+  if (parsed && messageText !== trimmed) {
+    return messageText;
+  }
+
+  return trimmed;
+}
+
+function parseJsonMessage(message: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(message);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function getParsedMessageText(parsed: Record<string, unknown> | undefined): string | undefined {
+  if (!parsed) {
+    return undefined;
+  }
+
+  if (typeof parsed.message === "string") {
+    return parsed.message;
+  }
+
+  const nestedError = parsed.error;
+  if (nestedError && typeof nestedError === "object" && !Array.isArray(nestedError)) {
+    const nestedMessage = (nestedError as Record<string, unknown>).message;
+    return typeof nestedMessage === "string" ? nestedMessage : undefined;
+  }
+
+  return undefined;
+}
+
+function extractMissingPermissionScopes(message: string): string | undefined {
+  const match = message.match(/missing permission scopes?\s+(.+)/i);
+  if (!match?.[1]) {
+    return undefined;
+  }
+
+  const scopes = match[1]
+    .replace(/\s*\[[\s\S]*$/, "")
+    .replace(/[."'}\]]+$/g, "")
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter(Boolean);
+
+  return scopes.length ? scopes.join(", ") : undefined;
 }

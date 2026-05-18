@@ -85,17 +85,20 @@ button {
   display: grid;
   gap: 6px;
   justify-items: end;
+  max-width: 230px;
 }
 
 .token-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  max-width: 100%;
   padding: 5px 8px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
   line-height: 1.25;
+  text-align: left;
   background: #eef2ff;
   color: #3730a3;
 }
@@ -113,6 +116,12 @@ button {
   border-top-color: #2563eb;
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
+}
+
+.spinner.large {
+  width: 32px;
+  height: 32px;
+  border-width: 3px;
 }
 
 @keyframes spin {
@@ -347,8 +356,17 @@ button {
   width: 40px;
   min-width: 40px;
   padding: 0;
-  font-size: 18px;
   line-height: 1;
+}
+
+.button-icon {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .btn:hover {
@@ -429,13 +447,15 @@ button {
 }
 
 .message {
-  margin: 0 0 10px;
+  margin: 12px 12px 0;
   padding: 10px;
   border-radius: 6px;
   background: #eff6ff;
   color: #1d4ed8;
   font-size: 12px;
   font-weight: 600;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 .message.error {
@@ -447,6 +467,20 @@ button {
   padding: 32px 18px;
   text-align: center;
   color: #64748b;
+}
+
+.loading-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .bundle-card {

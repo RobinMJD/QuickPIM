@@ -10,7 +10,9 @@ import {
   saveDataCache
 } from "../lib/cache";
 import {
+  formatLoadMessages,
   getActivationRequirements,
+  getDurationOptions,
   getPortalUrlForTab,
   tabLabel,
   tokenStatusText,
@@ -131,7 +133,7 @@ function PopupApp() {
           : options.force
             ? "Forced refresh completed."
             : "";
-      setMessage([...(eligible.errors || []), ...(active.errors || []), cacheMessage].filter(Boolean).join(" "));
+      setMessage(formatLoadMessages([...(eligible.errors || []), ...(active.errors || []), cacheMessage].filter(Boolean)).join("\n"));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
@@ -163,7 +165,7 @@ function PopupApp() {
       setError("Select at least one role or group.");
       return;
     }
-    if (!effectiveJustification.trim()) {
+    if (getActivationRequirements(items).needsJustification && !effectiveJustification.trim()) {
       setError("Enter a justification or choose a saved one.");
       return;
     }
@@ -250,8 +252,8 @@ function PopupApp() {
           </div>
         </div>
         <div className="status-stack">
-          <TokenPill label="Microsoft Graph" status={tokenStatus?.graph} />
-          <TokenPill label="Azure Management" status={tokenStatus?.azureManagement} />
+          <TokenPill label="Graph API" status={tokenStatus?.graph} />
+          <TokenPill label="Azure API" status={tokenStatus?.azureManagement} />
         </div>
       </header>
 
@@ -271,16 +273,17 @@ function PopupApp() {
 
       {error ? <p className="message error">{error}</p> : null}
       {message ? <p className="message">{message}</p> : null}
+      {isLoading ? <LoadingState /> : null}
 
       {roleTabs.includes(tab as RoleTab) ? (
         <>
           <section className="toolbar">
             <input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name or scope" />
             <button className="btn icon-btn" onClick={() => void refresh({ force: true })} disabled={isLoading} title="Force refresh all data" aria-label="Force refresh all data">
-              ↻
+              <RefreshIcon />
             </button>
             <button className="btn icon-btn" onClick={openPortalForCurrentTab} disabled={!portalUrl} title={`Open ${tabLabel(tab)} in Microsoft Entra`} aria-label={`Open ${tabLabel(tab)} in Microsoft Entra`}>
-              ↗
+              <LinkIcon />
             </button>
           </section>
           <section className="filter-row">
@@ -364,6 +367,15 @@ function TokenPill({ label, status }: { label: string; status?: TokenStatus["gra
   return <span className={`token-pill ${tokenStatusTone(status)}`}>{tokenStatusText(label, status)}</span>;
 }
 
+function LoadingState() {
+  return (
+    <section className="loading-panel" aria-live="polite">
+      <span className="spinner large" aria-hidden="true" />
+      <span>Loading access data</span>
+    </section>
+  );
+}
+
 function RoleList({
   items,
   settings,
@@ -437,20 +449,23 @@ function ActivationBar(props: {
   onSaveJustification: () => void;
 }) {
   const justificationOptions = [...props.settings.savedJustifications, ...props.settings.recentJustifications];
+  const durationOptions = getDurationOptions();
   return (
     <section className="activation-bar">
       <div className="field">
-        <label>Activation time (hours)</label>
-        <input
-          className="input"
-          type="number"
-          min="0.5"
-          max="24"
-          step="0.5"
-          value={props.durationHours}
+        <label>Activation time</label>
+        <select
+          className="select"
+          value={String(props.durationHours)}
           onChange={(event) => props.setDurationHours(Number(event.target.value))}
-          title="Duration in hours"
-        />
+          title="Activation duration"
+        >
+          {durationOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
       </div>
       {props.requirements.needsJustification ? (
         <div className="field" style={{ marginTop: 8 }}>
@@ -480,9 +495,11 @@ function ActivationBar(props: {
         </div>
       ) : null}
       <div className="button-row">
-        <button className="btn subtle" onClick={props.onSaveJustification} disabled={!props.requirements.needsJustification || !props.justification.trim()}>
-          Save justification
-        </button>
+        {props.requirements.needsJustification ? (
+          <button className="btn subtle" onClick={props.onSaveJustification} disabled={!props.justification.trim()}>
+            Save justification
+          </button>
+        ) : null}
         <button className="btn primary" onClick={props.onActivate} disabled={!props.selectedCount || props.isActivating}>
           Activate {props.selectedCount || ""} selected
         </button>
@@ -491,6 +508,26 @@ function ActivationBar(props: {
         </button>
       </div>
     </section>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="button-icon">
+      <path d="M20 6v5h-5" />
+      <path d="M4 18v-5h5" />
+      <path d="M18.2 9A7 7 0 0 0 6.7 6.7L4 9" />
+      <path d="M5.8 15a7 7 0 0 0 11.5 2.3L20 15" />
+    </svg>
+  );
+}
+
+function LinkIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="button-icon">
+      <path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" />
+      <path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1" />
+    </svg>
   );
 }
 
