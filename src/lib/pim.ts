@@ -30,6 +30,10 @@ export function normalizeDirectoryRole(role: DirectoryRoleApi): DirectoryRoleIte
     directoryScopeId,
     scopeLabel: directoryScopeId === "/" ? "Tenant" : directoryScopeId,
     status: "eligible",
+    activationRequirements: {
+      justification: true,
+      ticket: false
+    },
     raw: role
   };
 }
@@ -60,6 +64,10 @@ export function normalizeAzureRole(role: AzureRoleApi): AzureRoleItem {
     roleEligibilityScheduleId: properties.roleEligibilityScheduleId,
     scopeLabel: scopeName ? `${subscriptionName} / ${scopeName}` : subscriptionName,
     status: "eligible",
+    activationRequirements: {
+      justification: true,
+      ticket: false
+    },
     raw: role
   };
 }
@@ -80,6 +88,10 @@ export function normalizePimGroup(group: PimGroupApi, groupInfo: GroupInfo = {})
     memberType: group.memberType,
     scopeLabel: accessId === "owner" ? "Owner" : "Member",
     status: "eligible",
+    activationRequirements: {
+      justification: true,
+      ticket: false
+    },
     raw: group
   };
 }

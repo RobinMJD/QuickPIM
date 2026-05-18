@@ -21,6 +21,10 @@ export interface BaseActivationItem {
   principalId: string;
   scopeLabel: string;
   status: ActivationStatus;
+  activationRequirements?: {
+    justification?: boolean;
+    ticket?: boolean;
+  };
   raw?: unknown;
 }
 
@@ -71,6 +75,17 @@ export interface QuickPimPreferences {
   defaultDurationHours: number;
   defaultSort: SortMode;
   recentJustificationLimit: number;
+}
+
+export interface CachedActivationEntry {
+  items: ActivationItem[];
+  errors: string[];
+  fetchedAt: number;
+}
+
+export interface QuickPimDataCache {
+  eligible?: CachedActivationEntry;
+  active?: CachedActivationEntry;
 }
 
 export interface QuickPimSettings {

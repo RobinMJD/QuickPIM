@@ -2,6 +2,23 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../styles.css";
 import {
+  DEFAULT_ACTIVE_CACHE_TTL_MS,
+  DEFAULT_ELIGIBLE_CACHE_TTL_MS,
+  formatCacheAge,
+  isCacheEntryFresh,
+  loadDataCache,
+  saveDataCache
+} from "../lib/cache";
+import {
+  getActivationRequirements,
+  getPortalUrlForTab,
+  tabLabel,
+  tokenStatusText,
+  tokenStatusTone,
+  type PopupTab,
+  type RoleTab
+} from "../lib/popupModel";
+import {
   DEFAULT_SETTINGS,
   addRecentJustification,
   addSavedJustification,
@@ -16,15 +33,14 @@ import {
 import type {
   ActivationItem,
   ActivationResponse,
+  CachedActivationEntry,
+  QuickPimDataCache,
   QuickPimBundle,
   QuickPimSettings,
   SortMode,
   TicketInfo,
   TokenStatus
 } from "../lib/types";
-
-type Tab = "eligible" | "active" | "bundles";
-type FilterType = "all" | ActivationItem["type"];
 
 interface MessageResponse<T> {
   success: boolean;
@@ -33,16 +49,15 @@ interface MessageResponse<T> {
 }
 
 function PopupApp() {
-  const [tab, setTab] = useState<Tab>("eligible");
+  const [tab, setTab] = useState<PopupTab>("directoryRole");
   const [settings, setSettings] = useState<QuickPimSettings>(DEFAULT_SETTINGS);
   const [eligibleItems, setEligibleItems] = useState<ActivationItem[]>([]);
   const [activeItems, setActiveItems] = useState<ActivationItem[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
   const [search, setSearch] = useState("");
-  const [filterType, setFilterType] = useState<FilterType>("all");
   const [sortMode, setSortMode] = useState<SortMode>("name");
-  const [durationHours, setDurationHours] = useState(1);
+  const [durationHours, setDurationHours] = useState(DEFAULT_SETTINGS.preferences.defaultDurationHours);
   const [justification, setJustification] = useState("");
   const [ticketSystem, setTicketSystem] = useState("");
   const [ticketNumber, setTicketNumber] = useState("");
@@ -52,7 +67,7 @@ function PopupApp() {
   const [isActivating, setIsActivating] = useState(false);
 
   useEffect(() => {
-    void refresh();
+    void refresh({ force: false });
   }, []);
 
   useEffect(() => {
@@ -65,33 +80,58 @@ function PopupApp() {
     () => [...selectedIds].map((id) => itemsById.get(id)).filter((item): item is ActivationItem => Boolean(item)),
     [itemsById, selectedIds]
   );
+  const requirements = useMemo(() => getActivationRequirements(selectedItems), [selectedItems]);
 
   const visibleEligibleItems = useMemo(() => {
     const term = search.trim().toLowerCase();
     const filtered = eligibleItems.filter((item) => {
-      const matchesType = filterType === "all" || item.type === filterType;
+      const matchesType = item.type === tab;
       const name = getDisplayName(item, settings).toLowerCase();
       const scope = item.scopeLabel.toLowerCase();
       return matchesType && (!term || name.includes(term) || scope.includes(term));
     });
     return sortItems(filtered, settings, sortMode);
-  }, [eligibleItems, filterType, search, settings, sortMode]);
+  }, [eligibleItems, search, settings, sortMode, tab]);
 
-  async function refresh() {
+  async function refresh(options: { force: boolean }) {
     setIsLoading(true);
     setError("");
     try {
-      const [loadedSettings, loadedTokens, eligible, active] = await Promise.all([
+      const [loadedSettings, loadedTokens, currentCache] = await Promise.all([
         loadSettings(),
         sendMessage<TokenStatus>({ action: "getTokenStatus" }),
-        sendMessage<{ items: ActivationItem[]; errors: string[] }>({ action: "getActivationItems" }),
-        sendMessage<{ items: ActivationItem[]; errors: string[] }>({ action: "getActiveItems" })
+        loadDataCache()
       ]);
+      const { entry: eligible, fromCache: eligibleFromCache, cache: nextEligibleCache } = await getDataWithCache(
+        "eligible",
+        currentCache,
+        DEFAULT_ELIGIBLE_CACHE_TTL_MS,
+        options.force,
+        () => sendMessage<{ items: ActivationItem[]; errors: string[] }>({ action: "getActivationItems" })
+      );
+      const { entry: active, fromCache: activeFromCache, cache: nextCache } = await getDataWithCache(
+        "active",
+        nextEligibleCache,
+        DEFAULT_ACTIVE_CACHE_TTL_MS,
+        options.force,
+        () => sendMessage<{ items: ActivationItem[]; errors: string[] }>({ action: "getActiveItems" })
+      );
+
+      if (!eligibleFromCache || !activeFromCache) {
+        await saveDataCache(nextCache);
+      }
+
       setSettings(loadedSettings);
       setTokenStatus(loadedTokens);
       setEligibleItems(applyAliases(eligible.items, loadedSettings));
       setActiveItems(applyAliases(active.items, loadedSettings));
-      setMessage([...(eligible.errors || []), ...(active.errors || [])].filter(Boolean).join(" "));
+      const cacheMessage =
+        eligibleFromCache && activeFromCache
+          ? `Using cached data from ${formatCacheAge(Math.min(eligible.fetchedAt, active.fetchedAt))}.`
+          : options.force
+            ? "Forced refresh completed."
+            : "";
+      setMessage([...(eligible.errors || []), ...(active.errors || []), cacheMessage].filter(Boolean).join(" "));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
@@ -153,7 +193,7 @@ function PopupApp() {
       if (response.errors.length) {
         setError(response.errors.map((item) => `${item.itemName}: ${item.error}`).join(" "));
       }
-      await refresh();
+      await refresh({ force: true });
     } catch (activationError) {
       setError(activationError instanceof Error ? activationError.message : String(activationError));
     } finally {
@@ -174,8 +214,21 @@ function PopupApp() {
     if (expansion.justification) setJustification(expansion.justification);
     setTicketSystem(expansion.ticketInfo.ticketSystem || "");
     setTicketNumber(expansion.ticketInfo.ticketNumber || "");
-    setTab("eligible");
+    setTab("directoryRole");
   }
+
+  function openPortalForCurrentTab() {
+    const url = getPortalUrlForTab(tab);
+    if (!url) return;
+    if (chrome.tabs?.create) {
+      void chrome.tabs.create({ url });
+    } else {
+      window.open(url, "_blank", "noopener");
+    }
+  }
+
+  const roleTabs: RoleTab[] = ["directoryRole", "pimGroup", "azureRole"];
+  const portalUrl = getPortalUrlForTab(tab);
 
   return (
     <main className="app-shell">
@@ -184,19 +237,30 @@ function PopupApp() {
           <img src="/img/QuickPim48.png" alt="" />
           <div>
             <h1>QuickPIM</h1>
-            <p>{isLoading ? "Loading access state" : `${eligibleItems.length} eligible items`}</p>
+            <p>
+              {isLoading ? (
+                <span className="loading-inline">
+                  <span className="spinner" aria-hidden="true" />
+                  Loading access state
+                </span>
+              ) : (
+                `${eligibleItems.length} eligible items`
+              )}
+            </p>
           </div>
         </div>
         <div className="status-stack">
-          <TokenPill label="Graph" status={tokenStatus?.graph} />
-          <TokenPill label="Azure" status={tokenStatus?.azureManagement} />
+          <TokenPill label="Microsoft Graph" status={tokenStatus?.graph} />
+          <TokenPill label="Azure Management" status={tokenStatus?.azureManagement} />
         </div>
       </header>
 
       <nav className="tab-bar">
-        <button className={`tab-button ${tab === "eligible" ? "active" : ""}`} onClick={() => setTab("eligible")}>
-          Eligible
-        </button>
+        {roleTabs.map((roleTab) => (
+          <button className={`tab-button ${tab === roleTab ? "active" : ""}`} onClick={() => setTab(roleTab)} key={roleTab}>
+            {tabLabel(roleTab)}
+          </button>
+        ))}
         <button className={`tab-button ${tab === "active" ? "active" : ""}`} onClick={() => setTab("active")}>
           Active
         </button>
@@ -208,21 +272,18 @@ function PopupApp() {
       {error ? <p className="message error">{error}</p> : null}
       {message ? <p className="message">{message}</p> : null}
 
-      {tab === "eligible" ? (
+      {roleTabs.includes(tab as RoleTab) ? (
         <>
           <section className="toolbar">
             <input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name or scope" />
-            <button className="btn" onClick={() => void refresh()} disabled={isLoading}>
-              Refresh
+            <button className="btn icon-btn" onClick={() => void refresh({ force: true })} disabled={isLoading} title="Force refresh all data" aria-label="Force refresh all data">
+              ↻
+            </button>
+            <button className="btn icon-btn" onClick={openPortalForCurrentTab} disabled={!portalUrl} title={`Open ${tabLabel(tab)} in Microsoft Entra`} aria-label={`Open ${tabLabel(tab)} in Microsoft Entra`}>
+              ↗
             </button>
           </section>
           <section className="filter-row">
-            <select className="select" value={filterType} onChange={(event) => setFilterType(event.target.value as FilterType)}>
-              <option value="all">All types</option>
-              <option value="directoryRole">Entra roles</option>
-              <option value="azureRole">Azure roles</option>
-              <option value="pimGroup">PIM groups</option>
-            </select>
             <select className="select" value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
               <option value="name">Name</option>
               <option value="lastUsed">Last use</option>
@@ -249,6 +310,7 @@ function PopupApp() {
             ticketNumber={ticketNumber}
             setTicketNumber={setTicketNumber}
             settings={settings}
+            requirements={requirements}
             selectedCount={selectedItems.length}
             isActivating={isActivating}
             onActivate={() => void activate(selectedItems)}
@@ -299,13 +361,7 @@ function PopupApp() {
 }
 
 function TokenPill({ label, status }: { label: string; status?: TokenStatus["graph"] }) {
-  const className = !status?.hasToken ? "token-pill warn" : status.isExpired ? "token-pill warn" : "token-pill ok";
-  const text = !status?.hasToken ? "missing" : status.isExpired ? "expired" : `${status.tokenAge}m`;
-  return (
-    <span className={className}>
-      {label}: {text}
-    </span>
-  );
+  return <span className={`token-pill ${tokenStatusTone(status)}`}>{tokenStatusText(label, status)}</span>;
 }
 
 function RoleList({
@@ -330,9 +386,8 @@ function RoleList({
       {items.map((item) => {
         const usage = getUsage(item, settings);
         const selected = selectedIds.has(item.id);
-        return (
-          <label className={`role-row ${selected ? "selected" : ""}`} key={item.id}>
-            <input type="checkbox" checked={selected} disabled={readonly} onChange={() => onToggle?.(item.id)} />
+        const body = (
+          <>
             <div>
               <p className="role-title">{getDisplayName(item, settings)}</p>
               <div className="role-meta">
@@ -343,6 +398,21 @@ function RoleList({
               </div>
             </div>
             <span className="badge">{item.status}</span>
+          </>
+        );
+
+        if (readonly) {
+          return (
+            <div className="role-row readonly" key={item.id}>
+              {body}
+            </div>
+          );
+        }
+
+        return (
+          <label className={`role-row ${selected ? "selected" : ""}`} key={item.id}>
+            <input type="checkbox" checked={selected} onChange={() => onToggle?.(item.id)} />
+            {body}
           </label>
         );
       })}
@@ -360,6 +430,7 @@ function ActivationBar(props: {
   ticketNumber: string;
   setTicketNumber: (value: string) => void;
   settings: QuickPimSettings;
+  requirements: ReturnType<typeof getActivationRequirements>;
   selectedCount: number;
   isActivating: boolean;
   onActivate: () => void;
@@ -368,7 +439,8 @@ function ActivationBar(props: {
   const justificationOptions = [...props.settings.savedJustifications, ...props.settings.recentJustifications];
   return (
     <section className="activation-bar">
-      <div className="activation-grid">
+      <div className="field">
+        <label>Activation time (hours)</label>
         <input
           className="input"
           type="number"
@@ -379,14 +451,20 @@ function ActivationBar(props: {
           onChange={(event) => props.setDurationHours(Number(event.target.value))}
           title="Duration in hours"
         />
-        <input
-          className="input"
-          value={props.justification}
-          onChange={(event) => props.setJustification(event.target.value)}
-          placeholder="Justification"
-        />
       </div>
-      {justificationOptions.length ? (
+      {props.requirements.needsJustification ? (
+        <div className="field" style={{ marginTop: 8 }}>
+          <label>Justification</label>
+          <textarea
+            className="textarea justification-textarea"
+            rows={2}
+            value={props.justification}
+            onChange={(event) => props.setJustification(event.target.value)}
+            placeholder="Why do you need this activation?"
+          />
+        </div>
+      ) : null}
+      {props.requirements.needsJustification && justificationOptions.length ? (
         <div className="chip-row">
           {justificationOptions.slice(0, 4).map((item) => (
             <button className="justification-chip" key={item} onClick={() => props.setJustification(item)}>
@@ -395,12 +473,14 @@ function ActivationBar(props: {
           ))}
         </div>
       ) : null}
-      <div className="activation-grid" style={{ marginTop: 8 }}>
-        <input className="input" value={props.ticketSystem} onChange={(event) => props.setTicketSystem(event.target.value)} placeholder="Ticket system" />
-        <input className="input" value={props.ticketNumber} onChange={(event) => props.setTicketNumber(event.target.value)} placeholder="Ticket number" />
-      </div>
+      {props.requirements.needsTicket ? (
+        <div className="activation-grid" style={{ marginTop: 8 }}>
+          <input className="input" value={props.ticketSystem} onChange={(event) => props.setTicketSystem(event.target.value)} placeholder="Ticket system" />
+          <input className="input" value={props.ticketNumber} onChange={(event) => props.setTicketNumber(event.target.value)} placeholder="Ticket number" />
+        </div>
+      ) : null}
       <div className="button-row">
-        <button className="btn subtle" onClick={props.onSaveJustification} disabled={!props.justification.trim()}>
+        <button className="btn subtle" onClick={props.onSaveJustification} disabled={!props.requirements.needsJustification || !props.justification.trim()}>
           Save justification
         </button>
         <button className="btn primary" onClick={props.onActivate} disabled={!props.selectedCount || props.isActivating}>
@@ -434,6 +514,40 @@ async function sendMessage<T>(message: Record<string, unknown>): Promise<T> {
     throw new Error(response?.error || "QuickPIM background request failed.");
   }
   return response.data as T;
+}
+
+async function getDataWithCache(
+  key: keyof QuickPimDataCache,
+  cache: QuickPimDataCache,
+  ttlMs: number,
+  force: boolean,
+  fetcher: () => Promise<{ items: ActivationItem[]; errors: string[] }>
+): Promise<{ entry: CachedActivationEntry; fromCache: boolean; cache: QuickPimDataCache }> {
+  const cached = cache[key];
+  if (!force && isCacheEntryFresh(cached, ttlMs)) {
+    return { entry: cached, fromCache: true, cache };
+  }
+
+  try {
+    const fresh = await fetcher();
+    const entry: CachedActivationEntry = {
+      ...fresh,
+      fetchedAt: Date.now()
+    };
+    return { entry, fromCache: false, cache: { ...cache, [key]: entry } };
+  } catch (error) {
+    if (cached) {
+      return {
+        entry: {
+          ...cached,
+          errors: [...cached.errors, error instanceof Error ? error.message : String(error)]
+        },
+        fromCache: true,
+        cache
+      };
+    }
+    throw error;
+  }
 }
 
 createRoot(document.getElementById("root")!).render(<PopupApp />);

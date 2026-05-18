@@ -20,7 +20,7 @@ export const DEFAULT_SETTINGS: QuickPimSettings = {
   usageStatsByItemId: {},
   activationHistory: [],
   preferences: {
-    defaultDurationHours: 1,
+    defaultDurationHours: 0.5,
     defaultSort: "name",
     recentJustificationLimit: 8
   }

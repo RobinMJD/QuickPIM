@@ -95,8 +95,30 @@ button {
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
+  line-height: 1.25;
   background: #eef2ff;
   color: #3730a3;
+}
+
+.loading-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #bfdbfe;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .token-pill.ok {
@@ -136,14 +158,14 @@ button {
 
 .toolbar {
   display: grid;
-  grid-template-columns: 1fr 128px;
+  grid-template-columns: 1fr 40px 40px;
   gap: 8px;
   padding: 12px;
 }
 
 .filter-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 8px;
   padding: 0 12px 12px;
 }
@@ -165,6 +187,10 @@ button {
   min-height: 76px;
 }
 
+.justification-textarea {
+  min-height: 58px;
+}
+
 .input:focus,
 .select:focus,
 .textarea:focus {
@@ -174,7 +200,7 @@ button {
 
 .content {
   padding: 12px;
-  padding-bottom: 188px;
+  padding-bottom: 248px;
 }
 
 .settings-content {
@@ -258,6 +284,10 @@ button {
   background: #eff6ff;
 }
 
+.role-row.readonly {
+  grid-template-columns: 1fr auto;
+}
+
 .role-title {
   margin: 0;
   color: #0f172a;
@@ -311,6 +341,14 @@ button {
   font-weight: 700;
   background: #e2e8f0;
   color: #0f172a;
+}
+
+.icon-btn {
+  width: 40px;
+  min-width: 40px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .btn:hover {
