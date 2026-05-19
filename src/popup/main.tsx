@@ -763,9 +763,20 @@ function ActivationBar(props: {
       ) : null}
       {hasSelection && props.requirements.needsJustification ? (
         <div className="field" style={{ marginTop: 8 }}>
-          <label>
-            Justification <span className="required-marker" aria-label="required">*</span>
-          </label>
+          <div className="justification-label-row">
+            <label>
+              Justification <span className="required-marker" aria-label="required">*</span>
+            </label>
+            <button
+              className="btn icon-btn save-justification-button"
+              onClick={props.onSaveJustification}
+              disabled={!props.justification.trim()}
+              title="Save this justification for reuse"
+              aria-label="Save justification"
+            >
+              <SaveIcon />
+            </button>
+          </div>
           <textarea
             className="textarea justification-textarea"
             rows={2}
@@ -792,11 +803,6 @@ function ActivationBar(props: {
         </div>
       ) : null}
       <div className="button-row">
-        {hasSelection && props.requirements.needsJustification ? (
-          <button className="btn subtle" onClick={props.onSaveJustification} disabled={!props.justification.trim()}>
-            Save justification
-          </button>
-        ) : null}
         {hasSelection ? (
           <button className="btn primary" onClick={props.onActivate} disabled={props.isActivating}>
             {props.isActivating ? "Activating..." : `Activate ${props.selectedCount} selected`}
@@ -831,6 +837,16 @@ function LinkIcon() {
     <svg viewBox="0 0 24 24" aria-hidden="true" className="button-icon">
       <path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" />
       <path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1" />
+    </svg>
+  );
+}
+
+function SaveIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="button-icon save-icon">
+      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
+      <path d="M17 21v-8H7v8" />
+      <path d="M7 3v5h8" />
     </svg>
   );
 }

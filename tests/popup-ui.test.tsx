@@ -784,6 +784,92 @@ describe("popup compact controls", () => {
     expect(css.match(/\.required-marker\s*\{[^}]+\}/)?.[0] || "").toContain("color: #dc2626;");
   });
 
+  test("uses an icon-only save justification action beside the justification label", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    const eligibleItem: ActivationItem = {
+      id: "directoryRole:reader:/",
+      type: "directoryRole",
+      sourceName: "Reader",
+      displayName: "Reader",
+      principalId: "principal-1",
+      scopeLabel: "Tenant",
+      status: "eligible",
+      roleDefinitionId: "reader",
+      directoryScopeId: "/",
+      activationRequirements: {
+        justification: true,
+        ticket: false
+      }
+    };
+    const storageData: Record<string, unknown> = {
+      [SETTINGS_KEY]: DEFAULT_SETTINGS,
+      [DATA_CACHE_KEY]: {
+        eligible: {
+          fetchedAt: Date.now(),
+          cacheKey: "graph:missing|azure:missing",
+          errors: [],
+          items: [eligibleItem]
+        },
+        active: {
+          fetchedAt: Date.now(),
+          cacheKey: "graph:missing|azure:missing",
+          errors: [],
+          items: []
+        }
+      }
+    };
+
+    vi.stubGlobal("chrome", {
+      runtime: {
+        sendMessage: vi.fn((message: { action: string }) => {
+          if (message.action === "getTokenStatus") {
+            return Promise.resolve({
+              success: true,
+              data: {
+                graph: { hasToken: false },
+                azureManagement: { hasToken: false }
+              }
+            });
+          }
+          return Promise.resolve({ success: true, data: { items: [], errors: [] } });
+        })
+      },
+      storage: {
+        local: {
+          get: vi.fn(async (key: string) => ({ [key]: storageData[key] })),
+          set: vi.fn(async (value: Record<string, unknown>) => Object.assign(storageData, value)),
+          remove: vi.fn(async () => undefined)
+        }
+      },
+      tabs: {
+        create: vi.fn()
+      }
+    });
+    vi.resetModules();
+    await import("../src/popup/main");
+
+    await waitFor(() => expect(document.body.textContent).toContain("Reader"));
+    document.querySelector<HTMLInputElement>('input[type="checkbox"]')?.click();
+
+    await waitFor(() => expect(document.querySelector(".justification-label-row")).toBeTruthy());
+    expect(document.body.textContent).not.toContain("Save justification");
+
+    const saveButton = document.querySelector<HTMLButtonElement>('button[aria-label="Save justification"]');
+    expect(saveButton).toBeTruthy();
+    expect(saveButton?.title).toBe("Save this justification for reuse");
+    expect(saveButton?.querySelector(".save-icon")).toBeTruthy();
+    expect(document.querySelector(".activation-bar > .button-row")?.textContent).not.toContain("Save justification");
+
+    setFieldValue(document.querySelector<HTMLTextAreaElement>(".justification-textarea")!, "INC-123 break fix");
+    saveButton?.click();
+
+    await waitFor(() =>
+      expect(storageData[SETTINGS_KEY]).toMatchObject({
+        savedJustifications: ["INC-123 break fix"]
+      })
+    );
+  });
+
   test("shows activation errors without waiting forever", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     const eligibleItem: ActivationItem = {

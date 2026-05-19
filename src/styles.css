@@ -611,6 +611,24 @@ button {
   font-weight: 700;
 }
 
+.justification-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.save-justification-button {
+  width: 30px;
+  min-width: 30px;
+  min-height: 30px;
+}
+
+.save-justification-button .button-icon {
+  width: 17px;
+  height: 17px;
+}
+
 .required-marker {
   color: #dc2626;
   font-weight: 900;
