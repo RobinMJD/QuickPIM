@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { APP_NAME, APP_VERSION } from "../src/lib/appMetadata";
 
 const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
 const packageLockJson = JSON.parse(readFileSync(resolve("package-lock.json"), "utf8"));
@@ -8,17 +9,17 @@ const manifest = JSON.parse(readFileSync(resolve("public/manifest.json"), "utf8"
 
 describe("versioning and extension manifest", () => {
   test("uses QuickPIM++ for the app name and a plus-safe package identifier", () => {
-    expect(manifest.name).toBe("QuickPIM++");
+    expect(manifest.name).toBe(APP_NAME);
     expect(packageJson.name).toBe("quickpim-plusplus");
     expect(packageLockJson.name).toBe("quickpim-plusplus");
     expect(packageLockJson.packages[""].name).toBe("quickpim-plusplus");
   });
 
   test("keeps package, lockfile, and manifest versions in sync at v2.0.1", () => {
-    expect(packageJson.version).toBe("2.0.1");
-    expect(packageLockJson.packages[""].version).toBe("2.0.1");
-    expect(packageLockJson.version).toBe("2.0.1");
-    expect(manifest.version).toBe("2.0.1");
+    expect(packageJson.version).toBe(APP_VERSION);
+    expect(packageLockJson.packages[""].version).toBe(APP_VERSION);
+    expect(packageLockJson.version).toBe(APP_VERSION);
+    expect(manifest.version).toBe(APP_VERSION);
   });
 
   test("uses only required host permissions and an explicit extension CSP", () => {

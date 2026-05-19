@@ -59,18 +59,16 @@ describe("settings Home page", () => {
       [SETTINGS_KEY]: createDefaultSettings()
     };
     const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes("/releases")) {
+      if (url.endsWith("/releases/tags/v2.0.1")) {
         return {
           ok: true,
-          json: async () => [
-            {
-              tag_name: "v2.0.1",
-              name: "QuickPIM++ v2.0.1",
-              body: "React rewrite, bundles, PIM groups, and cleaner settings.",
-              html_url: "https://github.com/RobinMJD/QuickPIM/releases/tag/v2.0.1",
-              published_at: "2026-05-18T10:00:00.000Z"
-            }
-          ]
+          json: async () => ({
+            tag_name: "v2.0.1",
+            name: "QuickPIM++ v2.0.1",
+            body: "React rewrite, bundles, PIM groups, and cleaner settings.",
+            html_url: "https://github.com/RobinMJD/QuickPIM/releases/tag/v2.0.1",
+            published_at: "2026-05-18T10:00:00.000Z"
+          })
         };
       }
       return { ok: true, json: async () => [] };
@@ -128,7 +126,7 @@ describe("settings Home page", () => {
     ]);
     expect(navButtons.at(-1)).toBe("About");
     expect(document.querySelectorAll(".settings-nav-icon")).toHaveLength(8);
-    expect(fetchMock.mock.calls[0][0]).toBe("https://api.github.com/repos/RobinMJD/QuickPIM/releases?per_page=5");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.github.com/repos/RobinMJD/QuickPIM/releases/tags/v2.0.1");
   });
 
   test("uses cached GitHub changelog data without fetching again", async () => {
@@ -200,7 +198,7 @@ describe("settings About page", () => {
     };
     const chromeMock = {
       runtime: {
-        getManifest: () => ({ name: "QuickPIM++", version: "2.0.1" }),
+        getManifest: () => ({ name: "QuickPIM++", version: "0.0.0" }),
         sendMessage: vi.fn(async (message: { action: string }) => {
           if (message.action === "getActivationItems") {
             return { success: true, data: { items: [], errors: [] } };
@@ -233,6 +231,7 @@ describe("settings About page", () => {
 
     const text = document.body.textContent || "";
     expect(text).toContain("QuickPIM++ 2.0.1");
+    expect(text).not.toContain("0.0.0");
     expect(text).toContain("Original author: Daniel Bradley");
     expect(document.querySelector<HTMLAnchorElement>('a[href="https://github.com/DanielBradley1/QuickPIM"]')?.textContent).toBe(
       "Daniel Bradley"

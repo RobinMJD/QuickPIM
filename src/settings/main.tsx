@@ -24,6 +24,7 @@ import {
   saveReferenceData
 } from "../lib/referenceData";
 import { getGenericJustificationWarning } from "../lib/justifications";
+import { APP_NAME, APP_RELEASE_TAG, APP_VERSION } from "../lib/appMetadata";
 import type { AccessDiagnostic, AccessSetupTarget, ActivationItem, QuickPimBundle, QuickPimDataCache, QuickPimFeature, QuickPimSettings, ReferenceDataCache, SortMode, TokenStatus } from "../lib/types";
 
 type SettingsTab = "home" | "access" | "aliases" | "justifications" | "bundles" | "preferences" | "data" | "about";
@@ -456,10 +457,11 @@ function AboutPanel({
   onClearTokens: () => void;
 }) {
   const manifest = chrome.runtime.getManifest();
+  const appName = sanitizeManifestText(manifest.name) || APP_NAME;
   return (
     <section className="panel about-panel">
       <div>
-        <h2>{manifest.name} {manifest.version}</h2>
+        <h2>{appName} {APP_VERSION}</h2>
         <p className="muted">Quick activation for Microsoft Entra roles, Azure roles, and PIM groups.</p>
       </div>
       <div className="about-grid">
@@ -1306,6 +1308,12 @@ async function loadGithubChangelog(now = Date.now()): Promise<ChangelogItem[]> {
     return cached;
   }
 
+  const currentRelease = await loadCurrentRelease();
+  if (currentRelease) {
+    await saveChangelogCache([currentRelease], now);
+    return [currentRelease];
+  }
+
   const releases = await fetchGithubJson(`${GITHUB_API_BASE}/releases?per_page=5`);
   if (Array.isArray(releases) && releases.length) {
     const items = releases
@@ -1338,6 +1346,27 @@ async function loadGithubChangelog(now = Date.now()): Promise<ChangelogItem[]> {
     : [];
   await saveChangelogCache(items, now);
   return items;
+}
+
+async function loadCurrentRelease(): Promise<ChangelogItem | undefined> {
+  try {
+    const release = await fetchGithubJson(`${GITHUB_API_BASE}/releases/tags/${APP_RELEASE_TAG}`);
+    if (!release || typeof release !== "object" || Array.isArray(release)) {
+      return undefined;
+    }
+    return buildChangelogItem(release as Record<string, unknown>);
+  } catch {
+    return undefined;
+  }
+}
+
+function buildChangelogItem(release: Record<string, unknown>): ChangelogItem {
+  return {
+    title: sanitizeChangelogText(release.name || release.tag_name || "Release", 100) || "Release",
+    description: getSummaryText(release.body) || "Release notes are available on GitHub.",
+    url: sanitizeGithubUrl(release.html_url),
+    date: sanitizeChangelogDate(release.published_at)
+  };
 }
 
 async function fetchGithubJson(url: string): Promise<unknown> {
@@ -1427,6 +1456,10 @@ function coerceChangelogItems(value: unknown): ChangelogItem[] {
 
 function sanitizeChangelogText(value: unknown, maxLength: number): string {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, maxLength) : "";
+}
+
+function sanitizeManifestText(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }
 
 function sanitizeGithubUrl(value: unknown): string {
