@@ -5,8 +5,7 @@ import type {
   QuickPimBundle,
   ReferenceDataCache,
   QuickPimSettings,
-  SortMode,
-  TicketInfo
+  SortMode
 } from "./types";
 import { getReferenceDisplayName, getReferenceScopeLabel } from "./referenceData";
 
@@ -21,7 +20,6 @@ const MAX_SAVED_JUSTIFICATIONS = 100;
 const MAX_BUNDLES = 50;
 const MAX_BUNDLE_ITEMS = 100;
 const MAX_BUNDLE_NAME_LENGTH = 80;
-const MAX_TICKET_FIELD_LENGTH = 128;
 const MIN_DURATION_HOURS = 0.5;
 const MAX_DURATION_HOURS = 24;
 
@@ -199,21 +197,12 @@ export function expandBundle(bundle: QuickPimBundle, items: ActivationItem[]): B
   const bundleItems = bundle.itemIds
     .map((itemId) => items.find((item) => item.id === itemId))
     .filter((item): item is ActivationItem => Boolean(item && item.status === "eligible"));
-  const ticketInfo: TicketInfo = {};
-
-  if (bundle.defaultTicketSystem) {
-    ticketInfo.ticketSystem = bundle.defaultTicketSystem;
-  }
-
-  if (bundle.defaultTicketNumber) {
-    ticketInfo.ticketNumber = bundle.defaultTicketNumber;
-  }
 
   return {
     items: bundleItems,
     durationHours: bundle.defaultDurationHours,
     justification: bundle.defaultJustification,
-    ticketInfo
+    ticketInfo: {}
   };
 }
 
@@ -324,9 +313,7 @@ function sanitizeBundles(value: unknown): QuickPimBundle[] {
         name,
         itemIds,
         defaultDurationHours: clampNumber(bundle.defaultDurationHours, MIN_DURATION_HOURS, MAX_DURATION_HOURS, DEFAULT_SETTINGS.preferences.defaultDurationHours),
-        defaultJustification: sanitizeString(bundle.defaultJustification, MAX_JUSTIFICATION_LENGTH),
-        defaultTicketSystem: sanitizeString(bundle.defaultTicketSystem, MAX_TICKET_FIELD_LENGTH),
-        defaultTicketNumber: sanitizeString(bundle.defaultTicketNumber, MAX_TICKET_FIELD_LENGTH)
+        defaultJustification: sanitizeString(bundle.defaultJustification, MAX_JUSTIFICATION_LENGTH)
       }
     ];
   });

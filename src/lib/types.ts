@@ -62,8 +62,6 @@ export interface QuickPimBundle {
   itemIds: string[];
   defaultDurationHours?: number;
   defaultJustification?: string;
-  defaultTicketSystem?: string;
-  defaultTicketNumber?: string;
 }
 
 export interface ActivationHistoryEntry {

@@ -419,3 +419,97 @@ describe("settings Access Setup page", () => {
     await waitFor(() => expect(document.body.textContent).toContain("Eligible items refreshed."));
   });
 });
+
+describe("settings Bundles page", () => {
+  test("uses two-line justification, hides ticket fields, and caps duration by selected items", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    window.history.replaceState(null, "", "#bundles");
+
+    const storageData: Record<string, unknown> = {
+      [SETTINGS_KEY]: DEFAULT_SETTINGS,
+      [DATA_CACHE_KEY]: {
+        eligible: {
+          fetchedAt: Date.now(),
+          cacheKey: "graph:missing|azure:missing",
+          errors: [],
+          items: [
+            {
+              id: "directoryRole:reader:/",
+              type: "directoryRole",
+              sourceName: "Reader",
+              displayName: "Reader",
+              principalId: "user-1",
+              roleDefinitionId: "reader",
+              directoryScopeId: "/",
+              scopeLabel: "Tenant",
+              status: "eligible",
+              activationRequirements: {
+                maxDurationHours: 2
+              }
+            },
+            {
+              id: "azureRole:owner:/subscriptions/sub-1",
+              type: "azureRole",
+              sourceName: "Owner",
+              displayName: "Owner",
+              principalId: "user-1",
+              roleDefinitionId: "owner",
+              scope: "/subscriptions/sub-1",
+              scopeLabel: "Production",
+              status: "eligible",
+              activationRequirements: {
+                maxDurationHours: 4
+              }
+            }
+          ]
+        }
+      }
+    };
+    const chromeMock = {
+      runtime: {
+        getManifest: () => ({ name: "QuickPIM", version: "2.0.0" }),
+        sendMessage: vi.fn(async (message: { action: string }) => {
+          if (message.action === "getActivationItems") {
+            throw new Error("Settings should use cached eligible data.");
+          }
+          if (message.action === "getTokenStatus") {
+            return {
+              success: true,
+              data: {
+                graph: { hasToken: false },
+                azureManagement: { hasToken: false }
+              }
+            };
+          }
+          return { success: true, data: true };
+        }),
+        getURL: (path: string) => `chrome-extension://quickpim/${path}`
+      },
+      storage: {
+        local: {
+          get: vi.fn(async (key: string) => ({ [key]: storageData[key] })),
+          set: vi.fn(async (value: Record<string, unknown>) => Object.assign(storageData, value)),
+          remove: vi.fn(async () => undefined)
+        }
+      }
+    };
+
+    vi.stubGlobal("chrome", chromeMock);
+    vi.resetModules();
+    await import("../src/settings/main");
+    await waitFor(() => expect(document.body.textContent).toContain("Role Bundles"));
+
+    expect(document.body.textContent).not.toMatch(/Ticket system|Ticket number/i);
+    const justification = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Bundle default justification"]');
+    expect(justification?.rows).toBe(2);
+
+    const readerOption = [...document.querySelectorAll("label.checkbox-option")].find((item) => item.textContent?.includes("Reader"));
+    readerOption?.querySelector<HTMLInputElement>('input[type="checkbox"]')?.click();
+
+    await waitFor(() => {
+      const duration = document.querySelector<HTMLSelectElement>('select[aria-label="Bundle duration"]');
+      expect(duration).toBeTruthy();
+      expect([...duration!.options].map((option) => option.textContent)).toEqual(["30 minutes", "1 hour", "2 hours"]);
+    });
+  });
+});

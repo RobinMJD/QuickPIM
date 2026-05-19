@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "../styles.css";
 import { buildAccessCapabilityItems, buildTokenCacheKey, getAccessSetupTargets, getPortalUrlsForTargets } from "../lib/access";
 import { DEFAULT_ELIGIBLE_CACHE_TTL_MS, formatCacheAge, getDataWithCache, loadDataCache, saveDataCache } from "../lib/cache";
+import { coerceDurationForItems, getDurationOptions } from "../lib/popupModel";
 import {
   DEFAULT_SETTINGS,
   SETTINGS_KEY,
@@ -645,30 +646,36 @@ function BundlesPanel({
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
   const [durationHours, setDurationHours] = useState(settings.preferences.defaultDurationHours);
   const [justification, setJustification] = useState("");
-  const [ticketSystem, setTicketSystem] = useState("");
-  const [ticketNumber, setTicketNumber] = useState("");
   const sortedItems = useMemo(
     () => [...items].sort((a, b) => getDisplayName(a, settings, referenceData).localeCompare(getDisplayName(b, settings, referenceData))),
     [items, referenceData, settings]
   );
+  const selectedItems = useMemo(
+    () => items.filter((item) => selectedItemIds.has(item.id)),
+    [items, selectedItemIds]
+  );
+  const durationOptions = useMemo(() => getDurationOptions(selectedItems), [selectedItems]);
+
+  useEffect(() => {
+    if (durationOptions.length) {
+      setDurationHours((current) => coerceDurationForItems(current, selectedItems));
+    }
+  }, [durationOptions, selectedItems]);
 
   async function saveBundle() {
     if (!name.trim() || !selectedItemIds.size) return;
+    const effectiveDuration = coerceDurationForItems(durationHours, selectedItems);
     const bundle: QuickPimBundle = {
       id: createBundleId(name),
       name: name.trim(),
       itemIds: [...selectedItemIds],
-      defaultDurationHours: durationHours,
-      defaultJustification: justification.trim() || undefined,
-      defaultTicketSystem: ticketSystem.trim() || undefined,
-      defaultTicketNumber: ticketNumber.trim() || undefined
+      defaultDurationHours: effectiveDuration,
+      defaultJustification: justification.trim() || undefined
     };
     await onSave({ ...settings, bundles: [bundle, ...settings.bundles.filter((item) => item.id !== bundle.id)] });
     setName("");
     setSelectedItemIds(new Set());
     setJustification("");
-    setTicketSystem("");
-    setTicketNumber("");
   }
 
   async function removeBundle(bundleId: string) {
@@ -687,23 +694,42 @@ function BundlesPanel({
   return (
     <section className="panel">
       <h2>Role Bundles</h2>
-      <div className="form-grid three">
+      <div className="form-grid">
         <div className="field">
           <label>Name</label>
           <input className="input" value={name} onChange={(event) => setName(event.target.value)} placeholder="Daily operations" />
         </div>
         <div className="field">
           <label>Duration</label>
-          <input className="input" type="number" min="0.5" max="24" step="0.5" value={durationHours} onChange={(event) => setDurationHours(Number(event.target.value))} />
-        </div>
-        <div className="field">
-          <label>Justification</label>
-          <input className="input" value={justification} onChange={(event) => setJustification(event.target.value)} placeholder="Optional default" />
+          <select
+            className="select"
+            value={String(durationOptions.some((option) => option.value === durationHours) ? durationHours : durationOptions[0]?.value || durationHours)}
+            onChange={(event) => setDurationHours(Number(event.target.value))}
+            disabled={!durationOptions.length}
+            aria-label="Bundle duration"
+          >
+            {durationOptions.length ? (
+              durationOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))
+            ) : (
+              <option value={durationHours}>Select roles first</option>
+            )}
+          </select>
         </div>
       </div>
-      <div className="form-grid" style={{ marginTop: 10 }}>
-        <input className="input" value={ticketSystem} onChange={(event) => setTicketSystem(event.target.value)} placeholder="Ticket system" />
-        <input className="input" value={ticketNumber} onChange={(event) => setTicketNumber(event.target.value)} placeholder="Ticket number" />
+      <div className="field" style={{ marginTop: 10 }}>
+        <label>Justification</label>
+        <textarea
+          className="textarea justification-textarea"
+          rows={2}
+          value={justification}
+          onChange={(event) => setJustification(event.target.value)}
+          placeholder="Optional default"
+          aria-label="Bundle default justification"
+        />
       </div>
       <div className="checkbox-grid" style={{ marginTop: 12 }}>
         {sortedItems.map((item) => (

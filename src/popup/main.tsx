@@ -230,8 +230,8 @@ function PopupApp() {
     const effectiveJustification = bundle?.defaultJustification || justification;
     const effectiveDuration = coerceDurationForItems(bundle?.defaultDurationHours || durationHours, activatableItems);
     const effectiveTicketInfo: TicketInfo = {
-      ticketSystem: bundle?.defaultTicketSystem || ticketSystem || undefined,
-      ticketNumber: bundle?.defaultTicketNumber || ticketNumber || undefined
+      ticketSystem: ticketSystem || undefined,
+      ticketNumber: ticketNumber || undefined
     };
 
     if (getActivationRequirements(activatableItems).needsJustification && !effectiveJustification.trim()) {
@@ -283,8 +283,8 @@ function PopupApp() {
     setSelectedIds(new Set(expansion.items.map((item) => item.id)));
     if (expansion.durationHours) setDurationHours(expansion.durationHours);
     if (expansion.justification) setJustification(expansion.justification);
-    setTicketSystem(expansion.ticketInfo.ticketSystem || "");
-    setTicketNumber(expansion.ticketInfo.ticketNumber || "");
+    setTicketSystem("");
+    setTicketNumber("");
     setTab("directoryRole");
   }
 

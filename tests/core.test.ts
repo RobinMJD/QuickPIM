@@ -266,20 +266,33 @@ describe("settings helpers", () => {
       name: "Daily ops",
       itemIds: ["directoryRole:reader:/", "pimGroup:group-1:member"],
       defaultDurationHours: 2,
-      defaultJustification: "Daily operations",
-      defaultTicketSystem: "Jira",
-      defaultTicketNumber: "OPS-1"
+      defaultJustification: "Daily operations"
     };
 
     expect(expandBundle(bundle, items)).toMatchObject({
       items,
       durationHours: 2,
       justification: "Daily operations",
-      ticketInfo: {
-        ticketSystem: "Jira",
-        ticketNumber: "OPS-1"
-      }
+      ticketInfo: {}
     });
+  });
+
+  test("drops obsolete ticket defaults from imported bundles", () => {
+    const imported = mergeSettings({
+      bundles: [
+        {
+          id: "bundle-1",
+          name: "Daily ops",
+          itemIds: ["directoryRole:reader:/"],
+          defaultTicketSystem: "Jira",
+          defaultTicketNumber: "OPS-1"
+        } as QuickPimBundle
+      ]
+    });
+
+    expect(imported.bundles[0]).not.toHaveProperty("defaultTicketSystem");
+    expect(imported.bundles[0]).not.toHaveProperty("defaultTicketNumber");
+    expect(expandBundle(imported.bundles[0], items).ticketInfo).toEqual({});
   });
 
   test("bundle expansion skips already active items", () => {
@@ -324,9 +337,7 @@ describe("settings helpers", () => {
           name: "x".repeat(120),
           itemIds: Array.from({ length: 140 }, (_, index) => `item-${index}`),
           defaultDurationHours: 99,
-          defaultJustification: "x".repeat(2000),
-          defaultTicketSystem: "x".repeat(200),
-          defaultTicketNumber: "OPS-1"
+          defaultJustification: "x".repeat(2000)
         }
       ],
       preferences: {
@@ -346,7 +357,8 @@ describe("settings helpers", () => {
     expect(imported.bundles[0].itemIds).toHaveLength(100);
     expect(imported.bundles[0].defaultDurationHours).toBe(24);
     expect(imported.bundles[0].defaultJustification).toHaveLength(1024);
-    expect(imported.bundles[0].defaultTicketSystem).toHaveLength(128);
+    expect(imported.bundles[0]).not.toHaveProperty("defaultTicketSystem");
+    expect(imported.bundles[0]).not.toHaveProperty("defaultTicketNumber");
     expect(imported.preferences).toMatchObject({
       defaultDurationHours: 24,
       defaultSort: "name",
