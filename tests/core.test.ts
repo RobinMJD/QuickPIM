@@ -529,6 +529,64 @@ describe("activation request builders", () => {
     });
   });
 
+  test("appends the QuickPIM++ marker only to outbound activation payload justifications", () => {
+    const directoryRequest = buildActivationRequest(
+      {
+        id: "directoryRole:reader:/",
+        type: "directoryRole",
+        sourceName: "Global Reader",
+        displayName: "Global Reader",
+        principalId: "user-1",
+        roleDefinitionId: "reader",
+        directoryScopeId: "/",
+        scopeLabel: "Tenant",
+        status: "eligible"
+      },
+      1,
+      "Need access"
+    );
+    const azureRequest = buildActivationRequest(
+      {
+        id: "azureRole:reader:/subscriptions/sub-1",
+        type: "azureRole",
+        sourceName: "Reader",
+        displayName: "Reader",
+        principalId: "user-1",
+        roleDefinitionId: "/subscriptions/sub-1/providers/Microsoft.Authorization/roleDefinitions/reader",
+        scope: "/subscriptions/sub-1",
+        scopeLabel: "Production",
+        status: "eligible"
+      },
+      1,
+      "Need access"
+    );
+    const groupRequest = buildActivationRequest(
+      {
+        id: "pimGroup:group-1:member",
+        type: "pimGroup",
+        sourceName: "Break Glass Operators",
+        displayName: "Break Glass Operators",
+        principalId: "user-1",
+        groupId: "group-1",
+        accessId: "member",
+        scopeLabel: "Member",
+        status: "eligible"
+      },
+      1,
+      "Need access"
+    );
+
+    expect(directoryRequest.body).toMatchObject({
+      justification: "Need access {Activated using QuickPIM++}"
+    });
+    expect((azureRequest.body.properties as Record<string, unknown>).justification).toBe(
+      "Need access {Activated using QuickPIM++}"
+    );
+    expect(groupRequest.body).toMatchObject({
+      justification: "Need access {Activated using QuickPIM++}"
+    });
+  });
+
   test("allows Azure management group scopes for activation payloads", () => {
     const request = buildActivationRequest(
       {

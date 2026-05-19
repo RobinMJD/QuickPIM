@@ -14,7 +14,7 @@ import type {
   TicketInfo
 } from "./types";
 import { azureManagementUrl, encodePathSegment, graphApiUrl } from "./apiUrls";
-import { getGenericJustificationWarning } from "./justifications";
+import { formatJustificationForActivationRequest, getGenericJustificationWarning } from "./justifications";
 
 const MAX_DURATION_HOURS = 24;
 const MAX_JUSTIFICATION_LENGTH = 1024;
@@ -224,6 +224,7 @@ export function buildActivationRequest(
 ): ActivationRequest {
   validateActivationInput(item, durationHours, justification, ticketInfo);
   const duration = durationHoursToIso(durationHours);
+  const requestJustification = formatJustificationForActivationRequest(justification);
 
   if (item.type === "directoryRole") {
     const body: Record<string, unknown> = {
@@ -231,7 +232,7 @@ export function buildActivationRequest(
       principalId: item.principalId,
       roleDefinitionId: item.roleDefinitionId,
       directoryScopeId: item.directoryScopeId || "/",
-      justification,
+      justification: requestJustification,
       scheduleInfo: {
         startDateTime,
         expiration: {
@@ -257,7 +258,7 @@ export function buildActivationRequest(
         principalId: item.principalId,
         roleDefinitionId: item.roleDefinitionId,
         requestType: "SelfActivate",
-        justification,
+        justification: requestJustification,
         scheduleInfo: {
           startDateTime,
           expiration: {
@@ -297,7 +298,7 @@ export function buildActivationRequest(
         duration
       }
     },
-    justification
+    justification: requestJustification
   };
 
   addTicketInfo(body, ticketInfo);
