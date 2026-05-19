@@ -346,7 +346,7 @@ button {
 
 .role-row {
   display: grid;
-  grid-template-columns: 24px 1fr auto;
+  grid-template-columns: 24px 28px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   padding: 10px;
@@ -361,7 +361,7 @@ button {
 }
 
 .role-row.readonly {
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
 }
 
 .role-row.active-row {
@@ -415,6 +415,36 @@ button {
   display: inline-flex;
   align-items: center;
   min-height: 20px;
+}
+
+.favorite-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.favorite-button:hover {
+  background: #f1f5f9;
+  color: #ca8a04;
+}
+
+.favorite-button.active {
+  color: #ca8a04;
+}
+
+.star-icon {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
 }
 
 .role-status-stack {

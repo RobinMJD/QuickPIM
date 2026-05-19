@@ -230,6 +230,22 @@ describe("settings helpers", () => {
     ]);
   });
 
+  test("places favorite roles before other items for every sort mode", () => {
+    const favoriteSettings: QuickPimSettings = {
+      ...baseSettings,
+      favoriteItemIds: ["directoryRole:reader:/"]
+    };
+
+    expect(sortItems(items, favoriteSettings, "lastUsed").map((item) => item.id)).toEqual([
+      "directoryRole:reader:/",
+      "pimGroup:group-1:member"
+    ]);
+    expect(sortItems(items, favoriteSettings, "name").map((item) => item.id)).toEqual([
+      "directoryRole:reader:/",
+      "pimGroup:group-1:member"
+    ]);
+  });
+
   test("maintains de-duplicated recent justifications with saved templates separate", () => {
     const updated = addRecentJustification(
       {
@@ -301,6 +317,7 @@ describe("settings helpers", () => {
       },
       savedJustifications: ["Patch window", "Patch window", "x".repeat(2000)],
       recentJustifications: ["Recent work", "x".repeat(2000)],
+      favoriteItemIds: ["directoryRole:reader:/", "x".repeat(400), "directoryRole:reader:/"],
       bundles: [
         {
           id: "bundle:unsafe",
@@ -324,6 +341,7 @@ describe("settings helpers", () => {
     expect(imported.savedJustifications).toHaveLength(2);
     expect(imported.savedJustifications[1]).toHaveLength(1024);
     expect(imported.recentJustifications[1]).toHaveLength(1024);
+    expect(imported.favoriteItemIds).toEqual(["directoryRole:reader:/"]);
     expect(imported.bundles[0].name).toHaveLength(80);
     expect(imported.bundles[0].itemIds).toHaveLength(100);
     expect(imported.bundles[0].defaultDurationHours).toBe(24);

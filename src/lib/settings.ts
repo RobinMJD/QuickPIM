@@ -13,6 +13,7 @@ import { getReferenceDisplayName, getReferenceScopeLabel } from "./referenceData
 export const SETTINGS_KEY = "quickPimSettings.v1";
 const MAX_HISTORY_ENTRIES = 50;
 const MAX_ALIASES = 300;
+const MAX_FAVORITES = 300;
 const MAX_ALIAS_LENGTH = 120;
 const MAX_ITEM_ID_LENGTH = 256;
 const MAX_JUSTIFICATION_LENGTH = 1024;
@@ -27,6 +28,7 @@ const MAX_DURATION_HOURS = 24;
 export const DEFAULT_SETTINGS: QuickPimSettings = {
   version: 1,
   aliasesByItemId: {},
+  favoriteItemIds: [],
   savedJustifications: [],
   recentJustifications: [],
   bundles: [],
@@ -45,6 +47,7 @@ export function mergeSettings(input: Partial<QuickPimSettings> | undefined): Qui
   return {
     ...DEFAULT_SETTINGS,
     aliasesByItemId: sanitizeAliases(source.aliasesByItemId),
+    favoriteItemIds: sanitizeFavoriteItemIds(source.favoriteItemIds),
     usageStatsByItemId: sanitizeUsageStats(source.usageStatsByItemId),
     preferences: sanitizePreferences(source.preferences),
     savedJustifications: sanitizeStringList(source.savedJustifications, MAX_SAVED_JUSTIFICATIONS, MAX_JUSTIFICATION_LENGTH),
@@ -88,7 +91,13 @@ export function sortItems(
   referenceData?: ReferenceDataCache
 ): ActivationItem[] {
   const sortable = [...items];
+  const favoriteItemIds = new Set(settings.favoriteItemIds || []);
   return sortable.sort((a, b) => {
+    const favoriteDiff = Number(favoriteItemIds.has(b.id)) - Number(favoriteItemIds.has(a.id));
+    if (favoriteDiff) {
+      return favoriteDiff;
+    }
+
     if (sortMode === "lastUsed") {
       const aDate = getUsage(a, settings).lastUsedAt || "";
       const bDate = getUsage(b, settings).lastUsedAt || "";
@@ -260,6 +269,26 @@ function sanitizeUsageStats(value: unknown): QuickPimSettings["usageStatsByItemI
       ];
     });
   return Object.fromEntries(entries);
+}
+
+function sanitizeFavoriteItemIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const trimmed = item.trim();
+    if (!trimmed || trimmed.length > MAX_ITEM_ID_LENGTH) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+    if (result.length >= MAX_FAVORITES) break;
+  }
+  return result;
 }
 
 function sanitizePreferences(value: unknown): QuickPimSettings["preferences"] {

@@ -353,6 +353,95 @@ describe("popup compact controls", () => {
     await waitFor(() => expect(document.body.textContent).not.toContain("Activate 1 selected"));
     expect(document.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(false);
   });
+
+  test("toggles favorite rows with a star button and keeps favorites first", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    const items: ActivationItem[] = [
+      {
+        id: "directoryRole:zebra:/",
+        type: "directoryRole",
+        sourceName: "Zebra Role",
+        displayName: "Zebra Role",
+        principalId: "principal-1",
+        scopeLabel: "Tenant",
+        status: "eligible",
+        roleDefinitionId: "zebra",
+        directoryScopeId: "/"
+      },
+      {
+        id: "directoryRole:alpha:/",
+        type: "directoryRole",
+        sourceName: "Alpha Role",
+        displayName: "Alpha Role",
+        principalId: "principal-1",
+        scopeLabel: "Tenant",
+        status: "eligible",
+        roleDefinitionId: "alpha",
+        directoryScopeId: "/"
+      }
+    ];
+    const storageData: Record<string, unknown> = {
+      [SETTINGS_KEY]: DEFAULT_SETTINGS,
+      [DATA_CACHE_KEY]: {
+        eligible: {
+          fetchedAt: Date.now(),
+          cacheKey: "graph:missing|azure:missing",
+          errors: [],
+          items
+        },
+        active: {
+          fetchedAt: Date.now(),
+          cacheKey: "graph:missing|azure:missing",
+          errors: [],
+          items: []
+        }
+      }
+    };
+
+    const chromeMock = {
+      runtime: {
+        sendMessage: vi.fn((message: { action: string }) => {
+          if (message.action === "getTokenStatus") {
+            return Promise.resolve({
+              success: true,
+              data: {
+                graph: { hasToken: false },
+                azureManagement: { hasToken: false }
+              }
+            });
+          }
+          return Promise.resolve({ success: true, data: { items: [], errors: [] } });
+        })
+      },
+      storage: {
+        local: {
+          get: vi.fn(async (key: string) => ({ [key]: storageData[key] })),
+          set: vi.fn(async (value: Record<string, unknown>) => Object.assign(storageData, value)),
+          remove: vi.fn(async () => undefined)
+        }
+      },
+      tabs: {
+        create: vi.fn()
+      }
+    };
+
+    vi.stubGlobal("chrome", chromeMock);
+    vi.resetModules();
+    await import("../src/popup/main");
+
+    await waitFor(() => expect(document.body.textContent).toContain("Alpha Role"));
+    expect([...document.querySelectorAll(".role-title")].map((item) => item.textContent)).toEqual(["Alpha Role", "Zebra Role"]);
+
+    document.querySelector<HTMLButtonElement>('button[aria-label="Add Zebra Role to favorites"]')?.click();
+
+    await waitFor(() => {
+      expect([...document.querySelectorAll(".role-title")].map((item) => item.textContent)).toEqual(["Zebra Role", "Alpha Role"]);
+    });
+    expect(storageData[SETTINGS_KEY]).toMatchObject({
+      favoriteItemIds: ["directoryRole:zebra:/"]
+    });
+    expect(document.querySelector<HTMLButtonElement>('button[aria-label="Remove Zebra Role from favorites"]')).toBeTruthy();
+  });
 });
 
 describe("popup role row styling", () => {

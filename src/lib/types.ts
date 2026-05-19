@@ -122,6 +122,7 @@ export interface ReferenceDataCache {
 export interface QuickPimSettings {
   version: 1;
   aliasesByItemId: Record<string, string>;
+  favoriteItemIds: string[];
   savedJustifications: string[];
   recentJustifications: string[];
   bundles: QuickPimBundle[];

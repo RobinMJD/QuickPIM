@@ -100,6 +100,7 @@ function PopupApp() {
     [activeItems, eligibleItems]
   );
   const itemsById = useMemo(() => new Map(displayItems.map((item) => [item.id, item])), [displayItems]);
+  const favoriteIds = useMemo(() => new Set(settings.favoriteItemIds || []), [settings.favoriteItemIds]);
   const selectedItems = useMemo(
     () => getActivatableItems([...selectedIds].map((id) => itemsById.get(id)).filter((item): item is ActivationItem => Boolean(item))),
     [itemsById, selectedIds]
@@ -201,6 +202,22 @@ function PopupApp() {
       }
       return next;
     });
+  }
+
+  async function toggleFavorite(itemId: string) {
+    const favoriteItemIds = settings.favoriteItemIds.includes(itemId)
+      ? settings.favoriteItemIds.filter((id) => id !== itemId)
+      : [itemId, ...settings.favoriteItemIds];
+    const updated = {
+      ...settings,
+      favoriteItemIds
+    };
+    try {
+      await saveSettings(updated);
+      setSettings(updated);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : String(saveError));
+    }
   }
 
   async function activate(items: ActivationItem[], bundle?: QuickPimBundle) {
@@ -385,7 +402,9 @@ function PopupApp() {
               settings={settings}
               referenceData={referenceData}
               selectedIds={selectedIds}
+              favoriteIds={favoriteIds}
               onToggle={toggleSelected}
+              onToggleFavorite={(itemId) => void toggleFavorite(itemId)}
             />
           </section>
           <ActivationBar
@@ -494,14 +513,18 @@ function RoleList({
   settings,
   referenceData,
   selectedIds,
+  favoriteIds,
   onToggle,
+  onToggleFavorite,
   readonly = false
 }: {
   items: ActivationItem[];
   settings: QuickPimSettings;
   referenceData?: ReferenceDataCache;
   selectedIds: Set<string>;
+  favoriteIds: Set<string>;
   onToggle?: (itemId: string) => void;
+  onToggleFavorite?: (itemId: string) => void;
   readonly?: boolean;
 }) {
   if (!items.length) {
@@ -514,11 +537,25 @@ function RoleList({
         const usage = getUsage(item, settings);
         const isSelectable = !readonly && item.status === "eligible";
         const selected = isSelectable && selectedIds.has(item.id);
+        const displayName = getDisplayName(item, settings, referenceData);
+        const isFavorite = favoriteIds.has(item.id);
         const activeTitle = getActiveStatusTitle(item);
         const body = (
           <>
+            <button
+              type="button"
+              className={`favorite-button ${isFavorite ? "active" : ""}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleFavorite?.(item.id);
+              }}
+              title={isFavorite ? "Remove from favorites" : "Add to favorites"}
+              aria-label={`${isFavorite ? "Remove" : "Add"} ${displayName} ${isFavorite ? "from" : "to"} favorites`}
+            >
+              <StarIcon filled={isFavorite} />
+            </button>
             <div>
-              <p className="role-title">{getDisplayName(item, settings, referenceData)}</p>
+              <p className="role-title">{displayName}</p>
               <div className="role-meta">
                 <span className={`badge ${item.type}`}>{typeLabel(item.type)}</span>
                 <span className="scope-label">{getScopeLabel(item, referenceData)}</span>
@@ -545,10 +582,10 @@ function RoleList({
         }
 
         return (
-          <label className={`role-row ${selected ? "selected" : ""}`} key={item.id}>
+          <div className={`role-row ${selected ? "selected" : ""}`} key={item.id}>
             <input type="checkbox" checked={selected} onChange={() => onToggle?.(item.id)} />
             {body}
-          </label>
+          </div>
         );
       })}
     </div>
@@ -685,6 +722,14 @@ function SortIcon() {
       <path d="M4 7l3-3 3 3" />
       <path d="M17 20V4" />
       <path d="M14 17l3 3 3-3" />
+    </svg>
+  );
+}
+
+function StarIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="star-icon">
+      <path d="m12 3.7 2.5 5.1 5.6.8-4 3.9.9 5.5-5-2.6-5 2.6.9-5.5-4-3.9 5.6-.8L12 3.7Z" fill={filled ? "currentColor" : "none"} />
     </svg>
   );
 }
