@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { DATA_CACHE_KEY } from "../src/lib/cache";
 import { DEFAULT_SETTINGS, SETTINGS_KEY } from "../src/lib/settings";
 
 afterEach(() => {
@@ -84,6 +85,70 @@ describe("settings About page", () => {
 });
 
 describe("settings Access Setup page", () => {
+  test("uses fresh cached eligible items when settings opens", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    window.history.replaceState(null, "", "#aliases");
+
+    const storageData: Record<string, unknown> = {
+      [SETTINGS_KEY]: DEFAULT_SETTINGS,
+      [DATA_CACHE_KEY]: {
+        eligible: {
+          fetchedAt: Date.now(),
+          cacheKey: "graph::|azure::",
+          errors: [],
+          items: [
+            {
+              id: "directoryRole:reader:/",
+              type: "directoryRole",
+              sourceName: "Global Reader",
+              displayName: "Global Reader",
+              principalId: "user-1",
+              roleDefinitionId: "reader",
+              directoryScopeId: "/",
+              scopeLabel: "Tenant",
+              status: "eligible"
+            }
+          ]
+        }
+      }
+    };
+    const chromeMock = {
+      runtime: {
+        getManifest: () => ({ name: "QuickPIM", version: "2.0.0" }),
+        sendMessage: vi.fn(async (message: { action: string }) => {
+          if (message.action === "getActivationItems") {
+            throw new Error("Settings should use cached eligible data.");
+          }
+          if (message.action === "getTokenStatus") {
+            return {
+              success: true,
+              data: {
+                graph: { hasToken: true, isExpired: false },
+                azureManagement: { hasToken: true, isExpired: false }
+              }
+            };
+          }
+          return { success: true, data: true };
+        })
+      },
+      storage: {
+        local: {
+          get: vi.fn(async (key: string) => ({ [key]: storageData[key] })),
+          set: vi.fn(async (value: Record<string, unknown>) => Object.assign(storageData, value)),
+          remove: vi.fn(async () => undefined)
+        }
+      }
+    };
+
+    vi.stubGlobal("chrome", chromeMock);
+    vi.resetModules();
+    await import("../src/settings/main");
+    await waitFor(() => expect(document.body.textContent).toContain("Global Reader"));
+
+    const actions = chromeMock.runtime.sendMessage.mock.calls.map(([message]) => message.action);
+    expect(actions).not.toContain("getActivationItems");
+  });
+
   test("renders portal-driven setup without dedicated app or PowerShell guidance", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     window.history.replaceState(null, "", "#access");

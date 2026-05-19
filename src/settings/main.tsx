@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../styles.css";
 import { buildAccessCapabilityItems, buildTokenCacheKey, getAccessSetupTargets, getPortalUrlsForTargets } from "../lib/access";
-import { loadDataCache, saveDataCache } from "../lib/cache";
+import { DEFAULT_ELIGIBLE_CACHE_TTL_MS, formatCacheAge, getDataWithCache, loadDataCache, saveDataCache } from "../lib/cache";
 import {
   DEFAULT_SETTINGS,
   SETTINGS_KEY,
@@ -66,33 +66,44 @@ function SettingsApp() {
     }
     setError("");
     try {
-      const [loadedSettings, loadedItems, loadedTokens, loadedCache, loadedReferenceData] = await Promise.all([
+      const [loadedSettings, loadedTokens, loadedCache, loadedReferenceData] = await Promise.all([
         loadSettings(),
-        sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: any[] }>({ action: "getActivationItems" }),
         sendMessage<TokenStatus>({ action: "getTokenStatus" }),
         loadDataCache(),
         loadReferenceData()
       ]);
       const tokenCacheKey = buildTokenCacheKey(loadedTokens);
+      const eligible = await getDataWithCache(
+        "eligible",
+        loadedCache,
+        DEFAULT_ELIGIBLE_CACHE_TTL_MS,
+        Boolean(options.showProgress),
+        () => sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: any[] }>({ action: "getActivationItems" }),
+        Date.now(),
+        tokenCacheKey
+      );
+      const cachedActive = loadedCache.active?.cacheKey === tokenCacheKey ? loadedCache.active : undefined;
       const nextCache: QuickPimDataCache = {
-        ...(loadedCache.active?.cacheKey === tokenCacheKey ? { active: loadedCache.active } : {}),
-        eligible: {
-          ...loadedItems,
-          fetchedAt: Date.now(),
-          cacheKey: tokenCacheKey
-        }
+        ...(eligible.cache.eligible ? { eligible: eligible.cache.eligible } : {}),
+        ...(cachedActive ? { active: cachedActive } : {})
       };
-      await saveDataCache(nextCache);
-      const nextReferenceData = learnReferenceDataFromItems(loadedReferenceData, loadedItems.items);
+      if (!eligible.fromCache || loadedCache.active !== cachedActive) {
+        await saveDataCache(nextCache);
+      }
+      const nextReferenceData = learnReferenceDataFromItems(loadedReferenceData, eligible.entry.items);
       await saveReferenceData(nextReferenceData);
       setSettings(loadedSettings);
-      setItems(applyDisplayData(loadedItems.items, loadedSettings, nextReferenceData));
+      setItems(applyDisplayData(eligible.entry.items, loadedSettings, nextReferenceData));
       setTokenStatus(loadedTokens);
       setDataCache(nextCache);
       setReferenceData(nextReferenceData);
       setExportText(JSON.stringify(loadedSettings, null, 2));
       if (options.showProgress) {
-        setMessage("Eligible items refreshed.");
+        setMessage(
+          eligible.fromCache
+            ? `Using cached eligible items from ${formatCacheAge(eligible.entry.fetchedAt)}.`
+            : "Eligible items refreshed."
+        );
       }
     } catch (loadError) {
       if (options.showProgress) {

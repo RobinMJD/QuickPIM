@@ -5,7 +5,7 @@ import {
   DEFAULT_ACTIVE_CACHE_TTL_MS,
   DEFAULT_ELIGIBLE_CACHE_TTL_MS,
   formatCacheAge,
-  getDataWithCache,
+  getActivationDataWithCache,
   loadDataCache,
   saveDataCache
 } from "../lib/cache";
@@ -149,43 +149,40 @@ function PopupApp() {
       ]);
       const now = Date.now();
       const tokenCacheKey = buildTokenCacheKey(loadedTokens);
-      const { entry: eligible, fromCache: eligibleFromCache, cache: nextEligibleCache } = await getDataWithCache(
-        "eligible",
-        currentCache,
-        DEFAULT_ELIGIBLE_CACHE_TTL_MS,
-        options.force,
-        () => sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: any[] }>({ action: "getActivationItems" }),
+      const { eligible, active, cache: nextCache } = await getActivationDataWithCache({
+        cache: currentCache,
+        eligibleTtlMs: DEFAULT_ELIGIBLE_CACHE_TTL_MS,
+        activeTtlMs: DEFAULT_ACTIVE_CACHE_TTL_MS,
+        force: options.force,
         now,
-        tokenCacheKey
-      );
-      const { entry: active, fromCache: activeFromCache, cache: nextCache } = await getDataWithCache(
-        "active",
-        nextEligibleCache,
-        DEFAULT_ACTIVE_CACHE_TTL_MS,
-        options.force,
-        () => sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: any[] }>({ action: "getActiveItems" }),
-        now,
-        tokenCacheKey
-      );
+        tokenCacheKey,
+        fetchEligible: () =>
+          sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: any[] }>({ action: "getActivationItems" }),
+        fetchActive: () =>
+          sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: any[] }>({ action: "getActiveItems" })
+      });
 
-      if (!eligibleFromCache || !activeFromCache) {
+      if (!eligible.fromCache || !active.fromCache) {
         await saveDataCache(nextCache);
       }
-      const nextReferenceData = learnReferenceDataFromItems(loadedReferenceData, [...eligible.items, ...active.items]);
+      const nextReferenceData = learnReferenceDataFromItems(loadedReferenceData, [...eligible.entry.items, ...active.entry.items]);
       await saveReferenceData(nextReferenceData);
 
       const nextAccessCapabilities = buildAccessCapabilityItems(loadedTokens, nextCache);
-      const loadErrors = filterLoadErrorsForAccessState([...(eligible.errors || []), ...(active.errors || [])], nextAccessCapabilities);
+      const loadErrors = filterLoadErrorsForAccessState(
+        [...(eligible.entry.errors || []), ...(active.entry.errors || [])],
+        nextAccessCapabilities
+      );
 
       setSettings(loadedSettings);
       setTokenStatus(loadedTokens);
       setReferenceData(nextReferenceData);
       setAccessCapabilities(nextAccessCapabilities);
-      setEligibleItems(applyDisplayData(eligible.items, loadedSettings, nextReferenceData));
-      setActiveItems(applyDisplayData(active.items, loadedSettings, nextReferenceData));
+      setEligibleItems(applyDisplayData(eligible.entry.items, loadedSettings, nextReferenceData));
+      setActiveItems(applyDisplayData(active.entry.items, loadedSettings, nextReferenceData));
       const cacheMessage =
-        eligibleFromCache && activeFromCache
-          ? `Using cached data from ${formatCacheAge(Math.min(eligible.fetchedAt, active.fetchedAt))}.`
+        eligible.fromCache && active.fromCache
+          ? `Using cached data from ${formatCacheAge(Math.min(eligible.entry.fetchedAt, active.entry.fetchedAt))}.`
           : options.force
             ? "Forced refresh completed."
             : "";

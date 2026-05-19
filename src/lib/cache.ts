@@ -82,6 +82,53 @@ export async function getDataWithCache(
   }
 }
 
+export async function getActivationDataWithCache(options: {
+  cache: QuickPimDataCache;
+  force: boolean;
+  now?: number;
+  tokenCacheKey?: string;
+  eligibleTtlMs?: number;
+  activeTtlMs?: number;
+  fetchEligible: () => Promise<{ items: CachedActivationEntry["items"]; errors: string[]; diagnostics?: CachedActivationEntry["diagnostics"] }>;
+  fetchActive: () => Promise<{ items: CachedActivationEntry["items"]; errors: string[]; diagnostics?: CachedActivationEntry["diagnostics"] }>;
+}): Promise<{
+  eligible: Awaited<ReturnType<typeof getDataWithCache>>;
+  active: Awaited<ReturnType<typeof getDataWithCache>>;
+  cache: QuickPimDataCache;
+}> {
+  const now = options.now ?? Date.now();
+  const [eligible, active] = await Promise.all([
+    getDataWithCache(
+      "eligible",
+      options.cache,
+      options.eligibleTtlMs ?? DEFAULT_ELIGIBLE_CACHE_TTL_MS,
+      options.force,
+      options.fetchEligible,
+      now,
+      options.tokenCacheKey
+    ),
+    getDataWithCache(
+      "active",
+      options.cache,
+      options.activeTtlMs ?? DEFAULT_ACTIVE_CACHE_TTL_MS,
+      options.force,
+      options.fetchActive,
+      now,
+      options.tokenCacheKey
+    )
+  ]);
+
+  return {
+    eligible,
+    active,
+    cache: {
+      ...options.cache,
+      ...(eligible.cache.eligible ? { eligible: eligible.cache.eligible } : {}),
+      ...(active.cache.active ? { active: active.cache.active } : {})
+    }
+  };
+}
+
 function markDiagnosticsFromCache(entry: CachedActivationEntry, fromCache: boolean): CachedActivationEntry {
   return {
     ...entry,

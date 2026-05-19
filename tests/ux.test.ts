@@ -3,6 +3,7 @@ import {
   DEFAULT_ACTIVE_CACHE_TTL_MS,
   DEFAULT_ELIGIBLE_CACHE_TTL_MS,
   formatCacheAge,
+  getActivationDataWithCache,
   getDataWithCache,
   isCacheEntryFresh
 } from "../src/lib/cache";
@@ -113,6 +114,42 @@ describe("popup cache helpers", () => {
     expect(result.fromCache).toBe(false);
     expect(result.entry.items).toEqual([azureRole]);
     expect(result.entry.cacheKey).toBe("graph:new|azure:old");
+  });
+
+  test("refreshes eligible and active cache entries without serializing both API calls", async () => {
+    const now = Date.parse("2026-05-18T12:10:00.000Z");
+    const started: string[] = [];
+    let releaseEligible: (() => void) | undefined;
+    let activeStartedBeforeEligibleResolved = false;
+
+    const resultPromise = getActivationDataWithCache({
+      cache: {},
+      force: true,
+      now,
+      tokenCacheKey: "graph:new|azure:new",
+      fetchEligible: async () => {
+        started.push("eligible");
+        await new Promise<void>((resolve) => {
+          releaseEligible = resolve;
+        });
+        return { items: [directoryRole], errors: [] };
+      },
+      fetchActive: async () => {
+        started.push("active");
+        activeStartedBeforeEligibleResolved = Boolean(releaseEligible);
+        releaseEligible?.();
+        return { items: [{ ...azureRole, status: "active" }], errors: [] };
+      }
+    });
+
+    const result = await resultPromise;
+
+    expect(started).toEqual(["eligible", "active"]);
+    expect(activeStartedBeforeEligibleResolved).toBe(true);
+    expect(result.eligible.entry.items).toEqual([directoryRole]);
+    expect(result.active.entry.items).toEqual([{ ...azureRole, status: "active" }]);
+    expect(result.cache.eligible?.cacheKey).toBe("graph:new|azure:new");
+    expect(result.cache.active?.cacheKey).toBe("graph:new|azure:new");
   });
 });
 
