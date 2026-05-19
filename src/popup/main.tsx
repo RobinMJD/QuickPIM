@@ -404,6 +404,7 @@ function PopupApp() {
             isActivating={isActivating}
             onActivate={() => void activate(selectedItems)}
             onSaveJustification={() => void saveCurrentJustification()}
+            onClearSelection={() => setSelectedIds(new Set())}
           />
         </>
       ) : null}
@@ -570,6 +571,7 @@ function ActivationBar(props: {
   isActivating: boolean;
   onActivate: () => void;
   onSaveJustification: () => void;
+  onClearSelection: () => void;
 }) {
   const justificationOptions = [...props.settings.savedJustifications, ...props.settings.recentJustifications];
   const hasSelection = props.selectedCount > 0;
@@ -631,6 +633,11 @@ function ActivationBar(props: {
         {hasSelection ? (
           <button className="btn primary" onClick={props.onActivate} disabled={props.isActivating}>
             Activate {props.selectedCount} selected
+          </button>
+        ) : null}
+        {hasSelection ? (
+          <button className="btn subtle" onClick={props.onClearSelection} disabled={props.isActivating}>
+            Unselect all
           </button>
         ) : null}
         <button className="btn" onClick={() => chrome.runtime.openOptionsPage()}>

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_CACHE_KEY } from "../src/lib/cache";
 import { DEFAULT_SETTINGS, SETTINGS_KEY } from "../src/lib/settings";
+import type { ActivationItem } from "../src/lib/types";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -276,6 +277,81 @@ describe("popup compact controls", () => {
 
     expect(openedUrls).toEqual(["chrome-extension://quickpim/settings.html#bundles"]);
     expect(chromeMock.runtime.openOptionsPage).not.toHaveBeenCalled();
+  });
+
+  test("shows an Unselect all button while rows are selected and clears selection", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    const eligibleItem: ActivationItem = {
+      id: "directoryRole:reader:/",
+      type: "directoryRole",
+      sourceName: "Reader",
+      displayName: "Reader",
+      principalId: "principal-1",
+      scopeLabel: "Tenant",
+      status: "eligible",
+      roleDefinitionId: "reader",
+      directoryScopeId: "/"
+    };
+    const storageData: Record<string, unknown> = {
+      [SETTINGS_KEY]: DEFAULT_SETTINGS,
+      [DATA_CACHE_KEY]: {
+        eligible: {
+          fetchedAt: Date.now(),
+          cacheKey: "graph:missing|azure:missing",
+          errors: [],
+          items: [eligibleItem]
+        },
+        active: {
+          fetchedAt: Date.now(),
+          cacheKey: "graph:missing|azure:missing",
+          errors: [],
+          items: []
+        }
+      }
+    };
+
+    const chromeMock = {
+      runtime: {
+        sendMessage: vi.fn((message: { action: string }) => {
+          if (message.action === "getTokenStatus") {
+            return Promise.resolve({
+              success: true,
+              data: {
+                graph: { hasToken: false },
+                azureManagement: { hasToken: false }
+              }
+            });
+          }
+          return Promise.resolve({ success: true, data: { items: [], errors: [] } });
+        })
+      },
+      storage: {
+        local: {
+          get: vi.fn(async (key: string) => ({ [key]: storageData[key] })),
+          set: vi.fn(async (value: Record<string, unknown>) => Object.assign(storageData, value)),
+          remove: vi.fn(async () => undefined)
+        }
+      },
+      tabs: {
+        create: vi.fn()
+      }
+    };
+
+    vi.stubGlobal("chrome", chromeMock);
+    vi.resetModules();
+    await import("../src/popup/main");
+
+    await waitFor(() => expect(document.body.textContent).toContain("Reader"));
+    expect(document.body.textContent).not.toContain("Unselect all");
+    document.querySelector<HTMLInputElement>('input[type="checkbox"]')?.click();
+
+    await waitFor(() => expect(document.body.textContent).toContain("Activate 1 selected"));
+    expect(document.body.textContent).toContain("Unselect all");
+
+    clickButton("Unselect all");
+
+    await waitFor(() => expect(document.body.textContent).not.toContain("Activate 1 selected"));
+    expect(document.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(false);
   });
 });
 
