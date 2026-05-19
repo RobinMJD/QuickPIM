@@ -1,10 +1,10 @@
-# QuickPIM
+# QuickPIM++
 
-QuickPIM is a Chrome MV3 extension for quickly activating Microsoft Entra PIM roles, Azure resource PIM roles, and PIM-enabled groups from one compact interface.
+QuickPIM++ is a Chrome MV3 extension for quickly activating Microsoft Entra PIM roles, Azure resource PIM roles, and PIM-enabled groups from one compact interface.
 
 Current version: **v2.0.0**
 
-Original author: Daniel Bradley. This repository continues the original QuickPIM project with later community contributions and the v2 React/TypeScript rewrite.
+Original author: Daniel Bradley. QuickPIM++ continues the original QuickPIM project with later community contributions and the v2 React/TypeScript rewrite.
 
 ## Features
 
@@ -13,14 +13,14 @@ Original author: Daniel Bradley. This repository continues the original QuickPIM
 - Save reusable justifications and quickly reuse recent justifications.
 - Create bundles of roles and groups with optional default duration, justification, and ticket metadata.
 - Sort and filter by name, type, scope, last use, and activation count.
-- Use Access Setup to open the right Microsoft portal pages when QuickPIM needs fresh portal tokens.
+- Use Access Setup to open the right Microsoft portal pages when QuickPIM++ needs fresh portal tokens.
 - Manage aliases, bundles, justifications, learned names, preferences, and JSON import/export from the settings page.
 
 ## How It Works
 
-QuickPIM watches browser requests to Microsoft Graph and Azure Management endpoints and stores the bearer tokens locally in Chrome storage. When the guided Access Setup opens Microsoft Entra pages, QuickPIM also reads validated access-token candidates from that Entra page's local MSAL cache, including browser storage and IndexedDB, because some portal views no longer make direct Graph requests that extensions can observe. Those tokens are then used from the extension background worker to read eligible PIM assignments and submit self-activation requests.
+QuickPIM++ watches browser requests to Microsoft Graph and Azure Management endpoints and stores the bearer tokens locally in Chrome storage. When the guided Access Setup opens Microsoft Entra pages, QuickPIM++ also reads validated access-token candidates from that Entra page's local MSAL cache, including browser storage and IndexedDB, because some portal views no longer make direct Graph requests that extensions can observe. Those tokens are then used from the extension background worker to read eligible PIM assignments and submit self-activation requests.
 
-Tokens and settings remain in the local browser profile. QuickPIM does not send data to any service other than Microsoft Graph and Azure Management APIs.
+Tokens and settings remain in the local browser profile. QuickPIM++ does not send data to any service other than Microsoft Graph and Azure Management APIs.
 
 ## Development
 
@@ -56,7 +56,7 @@ The extension version is declared in both `package.json` and `public/manifest.js
 
 1. Sign in to the Azure Portal or Microsoft Entra admin center.
 2. Use Settings > Access Setup, or open the matching Entra/Azure PIM pages, so Graph and Azure Management API requests are made and tokens are captured.
-3. Open QuickPIM from the browser toolbar.
+3. Open QuickPIM++ from the browser toolbar.
 4. Select roles or groups, choose a saved or recent justification, then activate.
 5. Open Settings to define aliases, saved justifications, bundles, and preferences.
 
@@ -74,7 +74,7 @@ After building, load `dist/` and verify:
 ## Limitations
 
 - Roles protected by authentication contexts may still require extra interactive steps outside the extension.
-- QuickPIM depends on tokens already captured from Microsoft first-party portals; it does not perform its own OAuth sign-in flow.
+- QuickPIM++ depends on tokens already captured from Microsoft first-party portals; it does not perform its own OAuth sign-in flow.
 
 ## Changelog
 

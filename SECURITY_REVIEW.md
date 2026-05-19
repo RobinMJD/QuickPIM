@@ -1,10 +1,10 @@
-# QuickPIM Security Review
+# QuickPIM++ Security Review
 
 Reviewed for v2.0.0.
 
 ## Threat Model
 
-QuickPIM is a local MV3 browser extension that captures Microsoft Graph and Azure Management bearer tokens from first-party Microsoft portal traffic. It also runs a narrow content script on `https://entra.microsoft.com/*` to collect access-token candidates already present in that page's MSAL cache, including browser storage and bounded IndexedDB scans, then validates API audience and expiry in the background worker before storing anything. The main risks are token exposure, over-broad extension permissions, untrusted runtime messages, unsafe imported settings, and unintended API calls outside Microsoft Graph or Azure Management.
+QuickPIM++ is a local MV3 browser extension that captures Microsoft Graph and Azure Management bearer tokens from first-party Microsoft portal traffic. It also runs a narrow content script on `https://entra.microsoft.com/*` to collect access-token candidates already present in that page's MSAL cache, including browser storage and bounded IndexedDB scans, then validates API audience and expiry in the background worker before storing anything. The main risks are token exposure, over-broad extension permissions, untrusted runtime messages, unsafe imported settings, and unintended API calls outside Microsoft Graph or Azure Management.
 
 ## Token Handling
 
@@ -35,6 +35,6 @@ QuickPIM is a local MV3 browser extension that captures Microsoft Graph and Azur
 
 ## Remaining Accepted Risks
 
-- QuickPIM intentionally relies on captured portal tokens. A compromised browser profile or extension context could still expose local tokens.
-- Azure RBAC authorization is enforced server-side by Azure; QuickPIM can detect captured Azure Management tokens but cannot prove every target scope has sufficient RBAC until an API call is made.
+- QuickPIM++ intentionally relies on captured portal tokens. A compromised browser profile or extension context could still expose local tokens.
+- Azure RBAC authorization is enforced server-side by Azure; QuickPIM++ can detect captured Azure Management tokens but cannot prove every target scope has sufficient RBAC until an API call is made.
 - Authentication-context-protected activations may still require interactive portal steps outside the extension.

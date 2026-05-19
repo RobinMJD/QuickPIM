@@ -72,7 +72,7 @@ chrome.webRequest.onSendHeaders.addListener(
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!isTrustedRuntimeSender(sender)) {
-    sendResponse({ success: false, error: "Untrusted QuickPIM message sender." });
+    sendResponse({ success: false, error: "Untrusted QuickPIM++ message sender." });
     return false;
   }
 
@@ -88,7 +88,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     .then((data) => sendResponse({ success: true, data }))
     .catch((error: unknown) => {
       const message = sanitizeErrorMessage(error);
-      console.error("QuickPIM background error:", message);
+      console.error("QuickPIM++ background error:", message);
       sendResponse({ success: false, error: message });
     });
   return true;
@@ -110,7 +110,7 @@ async function handleMessage(message: ReturnType<typeof validateQuickPimMessage>
     case "activateItems":
       return activateItems(message.items, message.durationHours, message.justification, message.ticketInfo || {});
     default:
-      throw new Error("Unsupported QuickPIM message");
+      throw new Error("Unsupported QuickPIM++ message");
   }
 }
 
@@ -425,7 +425,7 @@ async function getDirectoryRoleDefinitionsBestEffort(graphToken: string): Promis
   try {
     return await getDirectoryRoleDefinitions(graphToken);
   } catch (error) {
-    console.warn("QuickPIM could not resolve directory role definitions:", error);
+    console.warn("QuickPIM++ could not resolve directory role definitions:", error);
     return {};
   }
 }

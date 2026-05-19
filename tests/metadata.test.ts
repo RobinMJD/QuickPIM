@@ -7,6 +7,13 @@ const packageLockJson = JSON.parse(readFileSync(resolve("package-lock.json"), "u
 const manifest = JSON.parse(readFileSync(resolve("public/manifest.json"), "utf8"));
 
 describe("versioning and extension manifest", () => {
+  test("uses QuickPIM++ for the app name and a plus-safe package identifier", () => {
+    expect(manifest.name).toBe("QuickPIM++");
+    expect(packageJson.name).toBe("quickpim-plusplus");
+    expect(packageLockJson.name).toBe("quickpim-plusplus");
+    expect(packageLockJson.packages[""].name).toBe("quickpim-plusplus");
+  });
+
   test("keeps package, lockfile, and manifest versions in sync at v2.0.0", () => {
     expect(packageJson.version).toBe("2.0.0");
     expect(packageLockJson.packages[""].version).toBe("2.0.0");
@@ -52,6 +59,6 @@ describe("versioning and extension manifest", () => {
     expect(securityReview).toContain("Threat Model");
     expect(securityReview).toContain("Token Handling");
     expect(license).toContain("MIT License");
-    expect(license).toContain("Daniel Bradley and QuickPIM contributors");
+    expect(license).toContain("Daniel Bradley and QuickPIM++ contributors");
   });
 });

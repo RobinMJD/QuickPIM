@@ -56,7 +56,7 @@ describe("settings About page", () => {
     };
     const chromeMock = {
       runtime: {
-        getManifest: () => ({ name: "QuickPIM", version: "2.0.0" }),
+        getManifest: () => ({ name: "QuickPIM++", version: "2.0.0" }),
         sendMessage: vi.fn(async (message: { action: string }) => {
           if (message.action === "getActivationItems") {
             return { success: true, data: { items: [], errors: [] } };
@@ -88,7 +88,7 @@ describe("settings About page", () => {
     await new Promise((resolve) => setTimeout(resolve, 80));
 
     const text = document.body.textContent || "";
-    expect(text).toContain("QuickPIM 2.0.0");
+    expect(text).toContain("QuickPIM++ 2.0.0");
     expect(text).toContain("Original author: Daniel Bradley");
     expect(text).toContain("Tokens and settings stay in this browser profile.");
   });
@@ -124,7 +124,7 @@ describe("settings Access Setup page", () => {
     };
     const chromeMock = {
       runtime: {
-        getManifest: () => ({ name: "QuickPIM", version: "2.0.0" }),
+        getManifest: () => ({ name: "QuickPIM++", version: "2.0.0" }),
         sendMessage: vi.fn(async (message: { action: string }) => {
           if (message.action === "getActivationItems") {
             throw new Error("Settings should use cached eligible data.");
@@ -169,7 +169,7 @@ describe("settings Access Setup page", () => {
     const openedUrls: string[] = [];
     const chromeMock = {
       runtime: {
-        getManifest: () => ({ name: "QuickPIM", version: "2.0.0" }),
+        getManifest: () => ({ name: "QuickPIM++", version: "2.0.0" }),
         sendMessage: vi.fn(async (message: { action: string }) => {
           if (message.action === "getActivationItems" || message.action === "getActiveItems") {
             return { success: true, data: { items: [], errors: [] } };
@@ -231,7 +231,7 @@ describe("settings Access Setup page", () => {
     let tokenRequests = 0;
     const chromeMock = {
       runtime: {
-        getManifest: () => ({ name: "QuickPIM", version: "2.0.0" }),
+        getManifest: () => ({ name: "QuickPIM++", version: "2.0.0" }),
         sendMessage: vi.fn(async (message: { action: string }) => {
           if (message.action === "getActivationItems") {
             return {
@@ -314,7 +314,7 @@ describe("settings Access Setup page", () => {
     let resolveEligibleRefresh: ((value: unknown) => void) | undefined;
     const chromeMock = {
       runtime: {
-        getManifest: () => ({ name: "QuickPIM", version: "2.0.0" }),
+        getManifest: () => ({ name: "QuickPIM++", version: "2.0.0" }),
         sendMessage: vi.fn(async (message: { action: string }) => {
           if (message.action === "getActivationItems") {
             eligibleCalls += 1;
@@ -377,7 +377,7 @@ describe("settings Access Setup page", () => {
     let resolveEligibleRefresh: ((value: unknown) => void) | undefined;
     const chromeMock = {
       runtime: {
-        getManifest: () => ({ name: "QuickPIM", version: "2.0.0" }),
+        getManifest: () => ({ name: "QuickPIM++", version: "2.0.0" }),
         sendMessage: vi.fn(async (message: { action: string }) => {
           if (message.action === "getActivationItems") {
             eligibleCalls += 1;
@@ -448,7 +448,7 @@ describe("settings justification guardrails", () => {
     };
     const chromeMock = {
       runtime: {
-        getManifest: () => ({ name: "QuickPIM", version: "2.0.0" }),
+        getManifest: () => ({ name: "QuickPIM++", version: "2.0.0" }),
         sendMessage: vi.fn(async (message: { action: string }) => {
           if (message.action === "getTokenStatus") {
             return {
@@ -536,7 +536,7 @@ describe("settings Bundles page", () => {
     };
     const chromeMock = {
       runtime: {
-        getManifest: () => ({ name: "QuickPIM", version: "2.0.0" }),
+        getManifest: () => ({ name: "QuickPIM++", version: "2.0.0" }),
         sendMessage: vi.fn(async (message: { action: string }) => {
           if (message.action === "getActivationItems") {
             throw new Error("Settings should use cached eligible data.");
@@ -599,7 +599,7 @@ describe("settings Bundles page", () => {
     };
     const chromeMock = {
       runtime: {
-        getManifest: () => ({ name: "QuickPIM", version: "2.0.0" }),
+        getManifest: () => ({ name: "QuickPIM++", version: "2.0.0" }),
         sendMessage: vi.fn(async (message: { action: string }) => {
           if (message.action === "getTokenStatus") {
             return {
@@ -668,7 +668,7 @@ describe("settings Bundles page", () => {
     };
     const chromeMock = {
       runtime: {
-        getManifest: () => ({ name: "QuickPIM", version: "2.0.0" }),
+        getManifest: () => ({ name: "QuickPIM++", version: "2.0.0" }),
         sendMessage: vi.fn(async (message: { action: string }) => {
           if (message.action === "getActivationItems") {
             throw new Error("Settings should use cached eligible data.");
@@ -763,7 +763,7 @@ describe("settings dark mode", () => {
     };
     const chromeMock = {
       runtime: {
-        getManifest: () => ({ name: "QuickPIM", version: "2.0.0" }),
+        getManifest: () => ({ name: "QuickPIM++", version: "2.0.0" }),
         sendMessage: vi.fn(async (message: { action: string }) => {
           if (message.action === "getActivationItems") {
             return { success: true, data: { items: [], errors: [] } };
@@ -814,7 +814,7 @@ describe("settings dark mode", () => {
     };
     const chromeMock = {
       runtime: {
-        getManifest: () => ({ name: "QuickPIM", version: "2.0.0" }),
+        getManifest: () => ({ name: "QuickPIM++", version: "2.0.0" }),
         sendMessage: vi.fn(async (message: { action: string }) => {
           if (message.action === "getActivationItems") {
             return { success: true, data: { items: [], errors: [] } };

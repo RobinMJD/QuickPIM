@@ -21,7 +21,7 @@ const MAX_PORTAL_SOURCE_LENGTH = 160;
 
 export function validateQuickPimMessage(message: unknown): QuickPimMessage {
   if (!isRecord(message) || typeof message.action !== "string") {
-    throw new Error("Unsupported QuickPIM message.");
+    throw new Error("Unsupported QuickPIM++ message.");
   }
 
   if (SIMPLE_ACTIONS.has(message.action)) {
@@ -49,7 +49,7 @@ export function validateQuickPimMessage(message: unknown): QuickPimMessage {
   }
 
   if (message.action !== "activateItems") {
-    throw new Error("Unsupported QuickPIM message.");
+    throw new Error("Unsupported QuickPIM++ message.");
   }
 
   if (!Array.isArray(message.items)) {

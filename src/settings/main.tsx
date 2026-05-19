@@ -202,7 +202,7 @@ function SettingsApp() {
         <div className="brand">
           <img src="/img/QuickPim48.png" alt="" />
           <div>
-            <h1>QuickPIM Settings</h1>
+            <h1>QuickPIM++ Settings</h1>
             <p>Aliases, saved reasons, bundles, and local preferences.</p>
           </div>
         </div>
@@ -279,11 +279,11 @@ function AboutPanel({
       <div className="about-grid">
         <div>
           <strong>Original author: {ORIGINAL_AUTHOR}</strong>
-          <p className="muted">v2 continues the QuickPIM project with the React rewrite, PIM groups, bundles, and security hardening.</p>
+          <p className="muted">v2 continues the original QuickPIM project as QuickPIM++ with the React rewrite, PIM groups, bundles, and security hardening.</p>
         </div>
         <div>
           <strong>Privacy</strong>
-          <p className="muted">Tokens and settings stay in this browser profile. QuickPIM only calls Microsoft Graph and Azure Management APIs.</p>
+          <p className="muted">Tokens and settings stay in this browser profile. QuickPIM++ only calls Microsoft Graph and Azure Management APIs.</p>
         </div>
         <div>
           <strong>Repository</strong>
@@ -385,7 +385,7 @@ function AccessSetupPanel({
           <p className="muted">
             {setupTargets.length
               ? `${setupTargets.length} area(s) need a portal refresh or are limited by the captured portal token.`
-              : "QuickPIM can use the currently captured portal tokens for all feature areas."}
+              : "QuickPIM++ can use the currently captured portal tokens for all feature areas."}
           </p>
         </div>
         <button className={`btn ${warningIgnored ? "" : "subtle"}`} onClick={() => void setIgnored(!warningIgnored)}>
@@ -431,7 +431,7 @@ function AccessSetupPanel({
         </section>
       ) : null}
       <p className="muted">
-        QuickPIM only uses tokens captured from Microsoft portal pages. If a page asks you to sign in or load PIM data, complete that
+        QuickPIM++ only uses tokens captured from Microsoft portal pages. If a page asks you to sign in or load PIM data, complete that
         step in the opened tab, then return here.
       </p>
 
@@ -446,8 +446,8 @@ function AccessSetupPanel({
         <ol className="tutorial-list">
           <li>Use Open missing portal pages to open the Microsoft pages that normally request the needed Graph or Azure tokens.</li>
           <li>Let the portal pages finish loading. Switch to them if sign-in, tenant selection, or page consent is required.</li>
-          <li>Return to QuickPIM and use Recheck now if the automatic refresh has not picked up the new portal token yet.</li>
-          <li>QuickPIM keeps learned role, group, subscription, and scope names locally so old friendly names can still be displayed later.</li>
+          <li>Return to QuickPIM++ and use Recheck now if the automatic refresh has not picked up the new portal token yet.</li>
+          <li>QuickPIM++ keeps learned role, group, subscription, and scope names locally so old friendly names can still be displayed later.</li>
         </ol>
       </div>
     </section>
@@ -1082,7 +1082,7 @@ function getDuplicateBundleName(name: string, existingNames: string[]): string {
 async function sendMessage<T>(message: Record<string, unknown>): Promise<T> {
   const response = (await chrome.runtime.sendMessage(message)) as MessageResponse<T>;
   if (!response?.success) {
-    throw new Error(response?.error || "QuickPIM background request failed.");
+    throw new Error(response?.error || "QuickPIM++ background request failed.");
   }
   return response.data as T;
 }

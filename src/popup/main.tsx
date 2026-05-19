@@ -422,7 +422,7 @@ function PopupApp() {
         <div className="brand">
           <img src="/img/QuickPim48.png" alt="" />
           <div>
-            <h1>QuickPIM</h1>
+            <h1>QuickPIM++</h1>
             <p>
               {isLoading ? null : `${displayItems.length} eligible items`}
             </p>
@@ -579,7 +579,7 @@ function PermissionWarningBanner({
   return (
     <section className="permission-banner" role="status">
       <div>
-        <strong>Some QuickPIM data is missing or stale.</strong>
+        <strong>Some QuickPIM++ data is missing or stale.</strong>
         <p>{missingCount} area{missingCount === 1 ? "" : "s"} need portal refresh or have limited API access.</p>
       </div>
       <div className="button-row nowrap">
@@ -909,7 +909,7 @@ function formatActivationConfirmation(successCount: number, errorCount: number):
 async function sendMessage<T>(message: Record<string, unknown>): Promise<T> {
   const response = (await chrome.runtime.sendMessage(message)) as MessageResponse<T>;
   if (!response?.success) {
-    throw new Error(response?.error || "QuickPIM background request failed.");
+    throw new Error(response?.error || "QuickPIM++ background request failed.");
   }
   return response.data as T;
 }

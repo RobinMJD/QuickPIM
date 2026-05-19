@@ -101,7 +101,7 @@ function buildAccessCapabilityItem(
       target,
       label: TARGET_LABELS[target],
       status: "needsPortalRefresh",
-      detail: token?.isExpired ? "Captured token expired. Open the portal to refresh it." : "Open the portal so QuickPIM can capture a token."
+      detail: token?.isExpired ? "Captured token expired. Open the portal to refresh it." : "Open the portal so QuickPIM++ can capture a token."
     };
   }
 
