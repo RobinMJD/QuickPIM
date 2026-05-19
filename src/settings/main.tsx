@@ -28,6 +28,7 @@ import type { AccessSetupTarget, ActivationItem, PopupTab, QuickPimBundle, Quick
 type SettingsTab = "about" | "access" | "aliases" | "justifications" | "bundles" | "preferences" | "data";
 
 const ORIGINAL_AUTHOR = "Daniel Bradley";
+const ORIGINAL_REPOSITORY_URL = "https://github.com/DanielBradley1/QuickPIM";
 const REPOSITORY_URL = "https://github.com/RobinMJD/QuickPIM";
 
 interface MessageResponse<T> {
@@ -275,8 +276,16 @@ function AboutPanel({
       </div>
       <div className="about-grid">
         <div>
-          <strong>Original author: {ORIGINAL_AUTHOR}</strong>
-          <p className="muted">v2 continues the original QuickPIM project as QuickPIM++ with the React rewrite, PIM groups, bundles, and security hardening.</p>
+          <strong>
+            Original author:{" "}
+            <a href={ORIGINAL_REPOSITORY_URL} target="_blank" rel="noreferrer">
+              {ORIGINAL_AUTHOR}
+            </a>
+          </strong>
+          <p className="muted">
+            v2 continues the original QuickPIM project as QuickPIM++ with the React rewrite, PIM groups, Azure roles,
+            role bundles, saved justifications, favorites, aliases, dark mode, learned names, access setup, and much more!
+          </p>
         </div>
         <div>
           <strong>Privacy</strong>

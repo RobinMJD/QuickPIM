@@ -90,6 +90,11 @@ describe("settings About page", () => {
     const text = document.body.textContent || "";
     expect(text).toContain("QuickPIM++ 2.0.0");
     expect(text).toContain("Original author: Daniel Bradley");
+    expect(document.querySelector<HTMLAnchorElement>('a[href="https://github.com/DanielBradley1/QuickPIM"]')?.textContent).toBe(
+      "Daniel Bradley"
+    );
+    expect(text).toContain("role bundles, saved justifications, favorites, aliases, dark mode, learned names, access setup, and much more!");
+    expect(text).not.toContain("security hardening");
     expect(text).toContain("Tokens and settings stay in this browser profile.");
   });
 });
