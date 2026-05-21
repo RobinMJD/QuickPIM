@@ -53,6 +53,7 @@ interface ChangelogItem {
 
 interface ChangelogCache {
   fetchedAt: number;
+  releaseTag: string;
   items: ChangelogItem[];
 }
 
@@ -1442,7 +1443,7 @@ function getCommitDate(commit: Record<string, unknown>): string | undefined {
 async function loadCachedChangelog(now: number): Promise<ChangelogItem[] | undefined> {
   const result = await chrome.storage.local.get(CHANGELOG_CACHE_KEY);
   const cache = coerceChangelogCache(result[CHANGELOG_CACHE_KEY]);
-  if (!cache || now - cache.fetchedAt > CHANGELOG_CACHE_TTL_MS) {
+  if (!cache || cache.releaseTag !== APP_RELEASE_TAG || now - cache.fetchedAt > CHANGELOG_CACHE_TTL_MS) {
     return undefined;
   }
   return cache.items;
@@ -1452,6 +1453,7 @@ async function saveChangelogCache(items: ChangelogItem[], fetchedAt: number): Pr
   await chrome.storage.local.set({
     [CHANGELOG_CACHE_KEY]: {
       fetchedAt,
+      releaseTag: APP_RELEASE_TAG,
       items: coerceChangelogItems(items)
     }
   });
@@ -1463,11 +1465,12 @@ function coerceChangelogCache(value: unknown): ChangelogCache | undefined {
   }
   const record = value as Record<string, unknown>;
   const fetchedAt = Number(record.fetchedAt);
+  const releaseTag = sanitizeChangelogText(record.releaseTag, 32);
   const items = coerceChangelogItems(record.items);
-  if (!Number.isFinite(fetchedAt) || fetchedAt <= 0 || !items.length) {
+  if (!Number.isFinite(fetchedAt) || fetchedAt <= 0 || !releaseTag || !items.length) {
     return undefined;
   }
-  return { fetchedAt, items };
+  return { fetchedAt, releaseTag, items };
 }
 
 function coerceChangelogItems(value: unknown): ChangelogItem[] {
