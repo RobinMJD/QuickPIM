@@ -1,8 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../styles.css";
-import { buildAccessCapabilityItems, buildTokenCacheKey, getAccessSetupTargets, getPortalUrlsForTargets, hasRequiredPortalToken } from "../lib/access";
-import { DEFAULT_ELIGIBLE_CACHE_TTL_MS, formatCacheAge, getDataWithCache, loadDataCache, saveDataCache } from "../lib/cache";
+import { buildAccessCapabilityItems, buildTokenCacheKey, buildTargetCacheKeys, getAccessSetupTargets, getPortalUrlsForTargets, hasRequiredPortalToken } from "../lib/access";
+import {
+  DEFAULT_ACTIVE_CACHE_TTL_MS,
+  DEFAULT_ELIGIBLE_CACHE_TTL_MS,
+  STALE_ELIGIBLE_CACHE_TTL_MS,
+  formatCacheAge,
+  getTargetEntriesFromCache,
+  loadDataCache,
+  mergeTargetEntries,
+  saveDataCache,
+  splitActivationResultByTarget,
+  updateCacheFromTargetResults
+} from "../lib/cache";
 import { DEFAULT_DURATION_OPTIONS, coerceDurationForItems, getDurationOptions, tabLabel as popupTabLabel } from "../lib/popupModel";
 import {
   DEFAULT_SETTINGS,
@@ -25,14 +36,14 @@ import {
 } from "../lib/referenceData";
 import { getGenericJustificationWarning } from "../lib/justifications";
 import { APP_NAME, APP_RELEASE_TAG, APP_VERSION } from "../lib/appMetadata";
-import type { AccessDiagnostic, AccessSetupTarget, ActivationItem, QuickPimBundle, QuickPimDataCache, QuickPimFeature, QuickPimSettings, ReferenceDataCache, SortMode, TokenStatus } from "../lib/types";
+import type { AccessSetupTarget, ActivationItem, ActivationSnapshot, QuickPimBundle, QuickPimDataCache, QuickPimFeature, QuickPimSettings, ReferenceDataCache, SortMode, TokenStatus } from "../lib/types";
 
 type SettingsTab = "home" | "access" | "aliases" | "justifications" | "bundles" | "preferences" | "data" | "about";
 
 const ORIGINAL_AUTHOR = "Daniel Bradley";
 const ORIGINAL_REPOSITORY_URL = "https://github.com/DanielBradley1/QuickPIM";
-const REPOSITORY_URL = "https://github.com/RobinMJD/QuickPIM";
-const GITHUB_API_BASE = "https://api.github.com/repos/RobinMJD/QuickPIM";
+const REPOSITORY_URL = "https://github.com/RobinMJD/QuickPIM-PlusPlus";
+const GITHUB_API_BASE = "https://api.github.com/repos/RobinMJD/QuickPIM-PlusPlus";
 const CHANGELOG_CACHE_KEY = "quickPimChangelog.v2";
 const CHANGELOG_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const CHANGELOG_FETCH_TIMEOUT_MS = 5000;
@@ -124,43 +135,51 @@ function SettingsApp() {
       ]);
       const tokenCacheKey = buildTokenCacheKey(loadedTokens);
       const enabledRoleFeatures = getEnabledRoleFeatures(loadedSettings);
-      const featureCacheKey = buildFeatureCacheKey(tokenCacheKey, enabledRoleFeatures);
-      const fetchEligibleItems = () =>
-        enabledRoleFeatures.length
-          ? sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: AccessDiagnostic[] }>({
-              action: "getActivationItems",
-              targets: enabledRoleFeatures
-            })
-          : Promise.resolve({ items: [], errors: [], diagnostics: [] });
-      const eligible = await getDataWithCache(
-        "eligible",
-        loadedCache,
-        DEFAULT_ELIGIBLE_CACHE_TTL_MS,
-        Boolean(options.showProgress),
-        fetchEligibleItems,
-        Date.now(),
-        featureCacheKey
-      );
-      const cachedActive = loadedCache.active?.cacheKey === featureCacheKey ? loadedCache.active : undefined;
-      const nextCache: QuickPimDataCache = {
-        ...(eligible.cache.eligible ? { eligible: eligible.cache.eligible } : {}),
-        ...(cachedActive ? { active: cachedActive } : {})
-      };
-      if (!eligible.fromCache || loadedCache.active !== cachedActive) {
+      const targetCacheKeys = buildTargetCacheKeys(loadedTokens, enabledRoleFeatures);
+      const legacyCacheKey = buildFeatureCacheKey(tokenCacheKey, enabledRoleFeatures);
+      let nextCache = loadedCache;
+      if (options.showProgress && enabledRoleFeatures.length) {
+        const snapshot = await fetchActivationSnapshot(enabledRoleFeatures);
+        const fetchedAt = Date.now();
+        nextCache = updateCacheFromTargetResults(
+          nextCache,
+          "eligible",
+          enabledRoleFeatures,
+          snapshot.eligibleByTarget || splitActivationResultByTarget(snapshot.eligible, enabledRoleFeatures),
+          fetchedAt,
+          targetCacheKeys
+        );
+        nextCache = updateCacheFromTargetResults(
+          nextCache,
+          "active",
+          enabledRoleFeatures,
+          snapshot.activeByTarget || splitActivationResultByTarget(snapshot.active, enabledRoleFeatures),
+          fetchedAt,
+          targetCacheKeys
+        );
         await saveDataCache(nextCache);
       }
-      const nextReferenceData = learnReferenceDataFromItems(loadedReferenceData, eligible.entry.items);
+
+      const now = Date.now();
+      const eligibleCache = getTargetEntriesFromCache(nextCache, "eligible", enabledRoleFeatures, targetCacheKeys, {
+        legacyCacheKey,
+        now,
+        freshTtlMs: DEFAULT_ELIGIBLE_CACHE_TTL_MS,
+        usableTtlMs: STALE_ELIGIBLE_CACHE_TTL_MS
+      });
+      const eligible = mergeTargetEntries(enabledRoleFeatures.map((target) => eligibleCache[target]?.entry), now, legacyCacheKey);
+      const nextReferenceData = learnReferenceDataFromItems(loadedReferenceData, eligible.items);
       await saveReferenceData(nextReferenceData);
       setSettings(loadedSettings);
-      setItems(applyDisplayData(eligible.entry.items, loadedSettings, nextReferenceData));
+      setItems(applyDisplayData(eligible.items, loadedSettings, nextReferenceData));
       setTokenStatus(loadedTokens);
       setDataCache(nextCache);
       setReferenceData(nextReferenceData);
       setExportText(JSON.stringify(loadedSettings, null, 2));
       if (options.showProgress) {
         setMessage(
-          eligible.fromCache
-            ? `Using cached eligible items from ${formatCacheAge(eligible.entry.fetchedAt)}.`
+          eligible.items.length
+            ? `Eligible items refreshed from ${formatCacheAge(eligible.fetchedAt)}.`
             : "Eligible items refreshed."
         );
       }
@@ -176,7 +195,7 @@ function SettingsApp() {
     }
   }
 
-  async function forceRefreshAccessData(tokens?: TokenStatus) {
+  async function forceRefreshAccessData(tokens?: TokenStatus, targets?: AccessSetupTarget[]) {
     setIsRefreshingAccess(true);
     setError("");
     setMessage("Refreshing access data...");
@@ -184,31 +203,49 @@ function SettingsApp() {
       const latestTokens = tokens ?? await sendMessage<TokenStatus>({ action: "getTokenStatus" });
       const tokenCacheKey = buildTokenCacheKey(latestTokens);
       const enabledRoleFeatures = getEnabledRoleFeatures(settings);
-      const featureCacheKey = buildFeatureCacheKey(tokenCacheKey, enabledRoleFeatures);
-      const [eligible, active] = await Promise.all([
-        enabledRoleFeatures.length
-          ? sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: AccessDiagnostic[] }>({
-              action: "getActivationItems",
-              targets: enabledRoleFeatures
-            })
-          : Promise.resolve({ items: [], errors: [], diagnostics: [] }),
-        enabledRoleFeatures.length
-          ? sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: AccessDiagnostic[] }>({
-              action: "getActiveItems",
-              targets: enabledRoleFeatures
-            })
-          : Promise.resolve({ items: [], errors: [], diagnostics: [] })
-      ]);
+      const refreshTargets = normalizeRefreshTargets(targets?.length ? targets : enabledRoleFeatures, enabledRoleFeatures);
+      const targetCacheKeys = buildTargetCacheKeys(latestTokens, enabledRoleFeatures);
+      const legacyCacheKey = buildFeatureCacheKey(tokenCacheKey, enabledRoleFeatures);
+      const snapshot = refreshTargets.length
+        ? await fetchActivationSnapshot(refreshTargets)
+        : {
+            eligible: { items: [], errors: [], diagnostics: [] },
+            active: { items: [], errors: [], diagnostics: [] },
+            eligibleByTarget: {},
+            activeByTarget: {}
+          };
       const fetchedAt = Date.now();
-      const nextCache: QuickPimDataCache = {
-        eligible: { ...eligible, fetchedAt, cacheKey: featureCacheKey },
-        active: { ...active, fetchedAt, cacheKey: featureCacheKey }
-      };
+      let nextCache = updateCacheFromTargetResults(
+        dataCache,
+        "eligible",
+        refreshTargets,
+        snapshot.eligibleByTarget || splitActivationResultByTarget(snapshot.eligible, refreshTargets),
+        fetchedAt,
+        targetCacheKeys
+      );
+      nextCache = updateCacheFromTargetResults(
+        nextCache,
+        "active",
+        refreshTargets,
+        snapshot.activeByTarget || splitActivationResultByTarget(snapshot.active, refreshTargets),
+        fetchedAt,
+        targetCacheKeys
+      );
       await saveDataCache(nextCache);
-      const nextReferenceData = learnReferenceDataFromItems(referenceData || await loadReferenceData(), [
-        ...eligible.items,
-        ...active.items
-      ]);
+      const eligibleCache = getTargetEntriesFromCache(nextCache, "eligible", enabledRoleFeatures, targetCacheKeys, {
+        legacyCacheKey,
+        now: fetchedAt,
+        freshTtlMs: DEFAULT_ELIGIBLE_CACHE_TTL_MS,
+        usableTtlMs: STALE_ELIGIBLE_CACHE_TTL_MS
+      });
+      const activeCache = getTargetEntriesFromCache(nextCache, "active", enabledRoleFeatures, targetCacheKeys, {
+        legacyCacheKey,
+        now: fetchedAt,
+        freshTtlMs: DEFAULT_ACTIVE_CACHE_TTL_MS
+      });
+      const eligible = mergeTargetEntries(enabledRoleFeatures.map((target) => eligibleCache[target]?.entry), fetchedAt, legacyCacheKey);
+      const active = mergeTargetEntries(enabledRoleFeatures.map((target) => activeCache[target]?.entry), fetchedAt, legacyCacheKey);
+      const nextReferenceData = learnReferenceDataFromItems(referenceData || await loadReferenceData(), [...eligible.items, ...active.items]);
       await saveReferenceData(nextReferenceData);
       setTokenStatus(latestTokens);
       setDataCache(nextCache);
@@ -519,7 +556,7 @@ function AccessSetupPanel({
   dataCache: QuickPimDataCache;
   isRefreshingAccess: boolean;
   onSave: (settings: QuickPimSettings, message?: string) => Promise<void>;
-  onRefreshAccessData: (tokens?: TokenStatus) => Promise<void>;
+  onRefreshAccessData: (tokens?: TokenStatus, targets?: AccessSetupTarget[]) => Promise<void>;
   onClearReferenceData: () => Promise<void>;
 }) {
   const [isRunningSetup, setIsRunningSetup] = useState(false);
@@ -556,7 +593,7 @@ function AccessSetupPanel({
     setIsRunningSetup(true);
     try {
       const latestTokens = await waitForPortalTokens(targets);
-      await onRefreshAccessData(latestTokens);
+      await onRefreshAccessData(latestTokens, targets);
     } finally {
       setIsRunningSetup(false);
     }
@@ -604,7 +641,11 @@ function AccessSetupPanel({
             "Open missing portal pages"
           )}
         </button>
-        <button className="btn" onClick={() => void onRefreshAccessData()} disabled={isRunningSetup || isRefreshingAccess}>
+        <button
+          className="btn"
+          onClick={() => void onRefreshAccessData(undefined, setupTargets.length ? setupTargets : enabledRoleFeatures)}
+          disabled={isRunningSetup || isRefreshingAccess}
+        >
           {isRefreshingAccess ? (
             <span className="loading-inline">
               <span className="spinner" aria-hidden="true" />
@@ -1511,7 +1552,7 @@ function sanitizeGithubUrl(value: unknown): string {
   }
   try {
     const parsed = new URL(value);
-    return parsed.protocol === "https:" && parsed.hostname === "github.com" && parsed.pathname.startsWith("/RobinMJD/QuickPIM")
+    return parsed.protocol === "https:" && parsed.hostname === "github.com" && parsed.pathname.startsWith("/RobinMJD/QuickPIM-PlusPlus")
       ? parsed.toString()
       : REPOSITORY_URL;
   } catch {
@@ -1524,6 +1565,54 @@ function sanitizeChangelogDate(value: unknown): string | undefined {
     return undefined;
   }
   return Number.isFinite(new Date(value).getTime()) ? value : undefined;
+}
+
+function normalizeRefreshTargets(targets: AccessSetupTarget[], enabledRoleFeatures: AccessSetupTarget[]): AccessSetupTarget[] {
+  const enabled = new Set(enabledRoleFeatures);
+  return targets.filter((target, index) => enabled.has(target) && targets.indexOf(target) === index);
+}
+
+async function fetchActivationSnapshot(targets: AccessSetupTarget[]): Promise<ActivationSnapshot> {
+  try {
+    const snapshot = await sendMessage<ActivationSnapshot>({
+      action: "getActivationSnapshot",
+      targets
+    });
+    if (isActivationSnapshot(snapshot)) {
+      return snapshot;
+    }
+  } catch {
+    // Fall through to the legacy paired calls for compatibility with older/background test runtimes.
+  }
+
+  const [eligible, active] = await Promise.all([
+    sendMessage<ActivationSnapshot["eligible"]>({
+      action: "getActivationItems",
+      targets
+    }),
+    sendMessage<ActivationSnapshot["active"]>({
+      action: "getActiveItems",
+      targets
+    })
+  ]);
+  return {
+    eligible,
+    active,
+    eligibleByTarget: splitActivationResultByTarget(eligible, targets),
+    activeByTarget: splitActivationResultByTarget(active, targets)
+  };
+}
+
+function isActivationSnapshot(value: unknown): value is ActivationSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return isActivationDataResult(record.eligible) && isActivationDataResult(record.active);
+}
+
+function isActivationDataResult(value: unknown): value is ActivationSnapshot["eligible"] {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && Array.isArray((value as Record<string, unknown>).items));
 }
 
 async function sendMessage<T>(message: Record<string, unknown>): Promise<T> {

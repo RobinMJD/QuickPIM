@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   buildAccessCapabilityItems,
+  buildTargetCacheKey,
   buildTokenCacheKey,
   getAccessSetupTargets,
   getPortalUrlsForTargets
@@ -282,5 +283,46 @@ describe("portal-driven access setup", () => {
     });
 
     expect(second).not.toBe(first);
+  });
+
+  test("builds independent target cache keys so unrelated token changes do not invalidate every feature", () => {
+    const first: TokenStatus = {
+      graph: {
+        hasToken: true,
+        expiresAt: "2026-05-18T14:00:00.000Z",
+        grantedScopes: ["RoleEligibilitySchedule.Read.Directory"]
+      },
+      graphTargets: {
+        directoryRole: {
+          hasToken: true,
+          expiresAt: "2026-05-18T14:00:00.000Z",
+          grantedScopes: ["RoleEligibilitySchedule.Read.Directory"]
+        },
+        pimGroup: {
+          hasToken: true,
+          expiresAt: "2026-05-18T14:00:00.000Z",
+          grantedScopes: ["PrivilegedEligibilitySchedule.Read.AzureADGroup"]
+        }
+      },
+      azureManagement: {
+        hasToken: true,
+        expiresAt: "2026-05-18T14:00:00.000Z"
+      }
+    };
+    const second: TokenStatus = {
+      ...first,
+      graphTargets: {
+        ...first.graphTargets,
+        pimGroup: {
+          hasToken: true,
+          expiresAt: "2026-05-18T15:00:00.000Z",
+          grantedScopes: ["PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup"]
+        }
+      }
+    };
+
+    expect(buildTargetCacheKey(second, "directoryRole")).toBe(buildTargetCacheKey(first, "directoryRole"));
+    expect(buildTargetCacheKey(second, "azureRole")).toBe(buildTargetCacheKey(first, "azureRole"));
+    expect(buildTargetCacheKey(second, "pimGroup")).not.toBe(buildTargetCacheKey(first, "pimGroup"));
   });
 });

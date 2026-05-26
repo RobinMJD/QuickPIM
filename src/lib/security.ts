@@ -1,4 +1,5 @@
 import type { TokenKind } from "./types";
+import { CLAIMS_CHALLENGE_MESSAGE, isClaimsChallengeMessage, redactClaimsChallengePayloads } from "./apiErrors";
 import { decodeToken } from "./token";
 
 const API_HOSTS: Record<TokenKind, string> = {
@@ -80,7 +81,11 @@ export function validateCapturedToken(token: string, tokenKind: TokenKind, now =
 
 export function sanitizeErrorMessage(error: unknown, maxLength = 240): string {
   const raw = error instanceof Error ? error.message : String(error ?? "");
-  const redacted = raw
+  if (isClaimsChallengeMessage(raw)) {
+    return CLAIMS_CHALLENGE_MESSAGE;
+  }
+
+  const redacted = redactClaimsChallengePayloads(raw)
     .replace(/Bearer\s+[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "Bearer [redacted token]")
     .replace(/\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[redacted token]")
     .replace(/\s+/g, " ")

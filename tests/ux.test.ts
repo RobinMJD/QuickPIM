@@ -2,17 +2,23 @@ import { describe, expect, test } from "vitest";
 import {
   DEFAULT_ACTIVE_CACHE_TTL_MS,
   DEFAULT_ELIGIBLE_CACHE_TTL_MS,
+  STALE_ELIGIBLE_CACHE_TTL_MS,
   formatCacheAge,
   getActivationDataWithCache,
   getDataWithCache,
+  getTargetCacheStatus,
+  getTargetEntriesFromCache,
   isCacheEntryFresh
 } from "../src/lib/cache";
 import {
   ENTRA_PORTAL_URLS,
+  formatActivationStatusLabel,
   formatLoadMessages,
+  getActivationStatusTitle,
   getActivationRequirements,
   coerceDurationForItems,
   getDurationOptions,
+  getRemainingSelectedIdsAfterActivationResults,
   getPortalUrlForTab,
   getActivatableItems,
   getActiveStatusTitle,
@@ -153,6 +159,93 @@ describe("popup cache helpers", () => {
     expect(result.cache.eligible?.cacheKey).toBe("graph:new|azure:new");
     expect(result.cache.active?.cacheKey).toBe("graph:new|azure:new");
   });
+
+  test("uses stale eligible target cache for display while marking it refreshable", () => {
+    const now = Date.parse("2026-05-18T12:45:00.000Z");
+    const status = getTargetCacheStatus({
+      cache: {
+        eligibleByTarget: {
+          directoryRole: {
+            items: [directoryRole],
+            errors: ["old transient error"],
+            fetchedAt: now - DEFAULT_ELIGIBLE_CACHE_TTL_MS - 1,
+            cacheKey: "graph:directory"
+          }
+        }
+      },
+      bucket: "eligible",
+      target: "directoryRole",
+      cacheKey: "graph:directory",
+      now,
+      freshTtlMs: DEFAULT_ELIGIBLE_CACHE_TTL_MS,
+      usableTtlMs: STALE_ELIGIBLE_CACHE_TTL_MS
+    });
+
+    expect(status.isUsable).toBe(true);
+    expect(status.isFresh).toBe(false);
+    expect(status.entry?.items).toEqual([directoryRole]);
+    expect(status.entry?.errors).toEqual([]);
+  });
+
+  test("does not reuse active target cache past the active freshness window", () => {
+    const now = Date.parse("2026-05-18T12:45:00.000Z");
+    const status = getTargetCacheStatus({
+      cache: {
+        activeByTarget: {
+          directoryRole: {
+            items: [{ ...directoryRole, status: "active" }],
+            errors: [],
+            fetchedAt: now - DEFAULT_ACTIVE_CACHE_TTL_MS - 1,
+            cacheKey: "graph:directory"
+          }
+        }
+      },
+      bucket: "active",
+      target: "directoryRole",
+      cacheKey: "graph:directory",
+      now,
+      freshTtlMs: DEFAULT_ACTIVE_CACHE_TTL_MS
+    });
+
+    expect(status.isUsable).toBe(false);
+    expect(status.entry).toBeUndefined();
+  });
+
+  test("can seed per-target display from a legacy aggregate cache", () => {
+    const now = Date.parse("2026-05-18T12:05:00.000Z");
+    const entries = getTargetEntriesFromCache(
+      {
+        eligible: {
+          items: [directoryRole, azureRole],
+          errors: [],
+          fetchedAt: now - 60_000,
+          cacheKey: "legacy:key",
+          diagnostics: [
+            { target: "directoryRole", success: true, checkedAt: "2026-05-18T12:04:00.000Z" },
+            { target: "azureRole", success: true, checkedAt: "2026-05-18T12:04:00.000Z" }
+          ]
+        }
+      },
+      "eligible",
+      ["directoryRole", "azureRole"],
+      {
+        directoryRole: "graph:directory",
+        azureRole: "azure"
+      },
+      {
+        legacyCacheKey: "legacy:key",
+        now,
+        freshTtlMs: DEFAULT_ELIGIBLE_CACHE_TTL_MS,
+        usableTtlMs: STALE_ELIGIBLE_CACHE_TTL_MS
+      }
+    );
+
+    expect(entries.directoryRole?.entry?.items).toEqual([directoryRole]);
+    expect(entries.azureRole?.entry?.items).toEqual([azureRole]);
+    expect(entries.directoryRole?.entry?.diagnostics).toEqual([
+      { target: "directoryRole", success: true, checkedAt: "2026-05-18T12:04:00.000Z", fromCache: true }
+    ]);
+  });
 });
 
 describe("popup model helpers", () => {
@@ -189,11 +282,18 @@ describe("popup model helpers", () => {
     expect(getPortalUrlForTab("azureRole")).toBe(ENTRA_PORTAL_URLS.azureRole);
   });
 
-  test("overlays active state only onto matching eligible items", () => {
+  test("overlays active and pending approval state only onto matching eligible items", () => {
     const activeDirectoryRole: ActivationItem = {
       ...directoryRole,
       status: "active",
       activeUntil: "2026-05-18T14:00:00.000Z"
+    };
+    const pendingDirectoryRole: ActivationItem = {
+      ...directoryRole,
+      status: "pendingApproval",
+      activationRequirements: {
+        approval: true
+      }
     };
     const activeOnlyRole: ActivationItem = {
       ...azureRole,
@@ -208,10 +308,22 @@ describe("popup model helpers", () => {
         activeUntil: "2026-05-18T14:00:00.000Z"
       }
     ]);
+    expect(mergeEligibleWithActive([directoryRole], [pendingDirectoryRole])).toEqual([
+      {
+        ...directoryRole,
+        status: "pendingApproval",
+        activationRequirements: {
+          approval: true
+        }
+      }
+    ]);
+    expect(mergeEligibleWithActive([directoryRole], [pendingDirectoryRole, activeDirectoryRole])[0]).toMatchObject({
+      status: "active"
+    });
   });
 
-  test("filters active items out of activatable selections", () => {
-    expect(getActivatableItems([directoryRole, { ...azureRole, status: "active" }])).toEqual([directoryRole]);
+  test("filters active and pending approval items out of activatable selections", () => {
+    expect(getActivatableItems([directoryRole, { ...azureRole, status: "active" }, { ...directoryRole, status: "pendingApproval" }])).toEqual([directoryRole]);
   });
 
   test("identifies high privilege rows from Microsoft-provided role metadata", () => {
@@ -254,6 +366,10 @@ describe("popup model helpers", () => {
       )
     ).toBe("Active until 2026-05-18 14:00 (about 1 hour 30 minutes remaining)");
     expect(getActiveStatusTitle({ ...directoryRole, status: "active" })).toBeUndefined();
+    expect(getActivationStatusTitle({ ...directoryRole, status: "pendingApproval", activationRequirements: { approval: true } })).toBe(
+      "Activation request is waiting for approval."
+    );
+    expect(formatActivationStatusLabel("pendingApproval")).toBe("Pending approval");
   });
 
   test("only requests activation metadata fields required by selected items", () => {
@@ -281,6 +397,23 @@ describe("popup model helpers", () => {
       "PIM Groups access is limited in the captured portal token. Use Access Setup to refresh portal access.",
       "Using cached data from 2 min ago."
     ]);
+  });
+
+  test("formats Graph claims challenges into a retry action", () => {
+    const claims = encodeURIComponent(JSON.stringify({ access_token: { acrs: { essential: true, value: "c1" } } }));
+
+    expect(formatLoadMessages([`&claims=${claims}`])).toEqual([
+      "Microsoft requires an additional sign-in or MFA challenge before this activation can continue. Open the matching Microsoft portal page, complete the prompt, then retry."
+    ]);
+  });
+
+  test("keeps failed activation items selected after a partial activation", () => {
+    const remaining = getRemainingSelectedIdsAfterActivationResults(["directoryRole:admin:/", "pimGroup:group-1:member"], [
+      { itemId: "pimGroup:group-1:member", itemName: "Privileged group", success: true },
+      { itemId: "directoryRole:admin:/", itemName: "User Administrator", success: false, error: "Claims challenge" }
+    ]);
+
+    expect([...remaining]).toEqual(["directoryRole:admin:/"]);
   });
 
   test("formats token expiry API errors into a short action", () => {

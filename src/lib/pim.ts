@@ -47,7 +47,7 @@ export function extractActivationRequirementsFromPolicyRules(
   const endUserAssignmentRules = rules.filter(isEndUserAssignmentRule);
   const expirationRule = endUserAssignmentRules.find((rule) => rule.id === "Expiration_EndUser_Assignment" || rule.maximumDuration);
   const enablementRule = endUserAssignmentRules.find((rule) => rule.id === "Enablement_EndUser_Assignment" || rule.enabledRules);
-  const approvalRule = endUserAssignmentRules.find((rule) => rule.id === "Approval_EndUser_Assignment" || rule.setting);
+  const approvalRule = endUserAssignmentRules.find(isApprovalRule);
   const enabledRules = enablementRule?.enabledRules || [];
   const maximumDuration = expirationRule?.maximumDuration;
   const requirements: Partial<NonNullable<ActivationItem["activationRequirements"]>> = {};
@@ -63,6 +63,10 @@ export function extractActivationRequirementsFromPolicyRules(
 
   if (approvalRule?.setting?.isRequestorJustificationRequired === true) {
     requirements.justification = true;
+  }
+
+  if (approvalRule?.setting && isApprovalRequired(approvalRule.setting)) {
+    requirements.approval = true;
   }
 
   return requirements;
@@ -478,6 +482,33 @@ function isEndUserAssignmentRule(rule: RoleManagementPolicyRuleApi): boolean {
     (target?.caller === "EndUser" && target.level === "Assignment") ||
     Boolean(rule.id?.includes("_EndUser_Assignment"))
   );
+}
+
+function isApprovalRule(rule: RoleManagementPolicyRuleApi): boolean {
+  return (
+    rule.id === "Approval_EndUser_Assignment" ||
+    rule.ruleType === "ApprovalRule" ||
+    Boolean(rule.setting && isApprovalSetting(rule.setting))
+  );
+}
+
+function isApprovalSetting(setting: NonNullable<RoleManagementPolicyRuleApi["setting"]>): boolean {
+  return (
+    setting.isApprovalRequired !== undefined ||
+    setting.isRequestorJustificationRequired !== undefined ||
+    setting.approvalMode !== undefined ||
+    setting.approvalStages !== undefined
+  );
+}
+
+function isApprovalRequired(setting: NonNullable<RoleManagementPolicyRuleApi["setting"]>): boolean {
+  if (setting.isApprovalRequired === true) {
+    return true;
+  }
+  if (Array.isArray(setting.approvalStages) && setting.approvalStages.length > 0) {
+    return true;
+  }
+  return typeof setting.approvalMode === "string" && !/^noapproval$/i.test(setting.approvalMode.replace(/\s+/g, ""));
 }
 
 function extractScopeFromRoleDefinitionId(roleDefinitionId: string, subscriptionId?: string): string {

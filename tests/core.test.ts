@@ -182,6 +182,27 @@ describe("PIM item normalization", () => {
       maxDurationHours: 4
     });
   });
+
+  test("extracts approval requirement from PIM policy rules", () => {
+    expect(
+      extractActivationRequirementsFromPolicyRules([
+        {
+          id: "Approval_EndUser_Assignment",
+          target: {
+            caller: "EndUser",
+            level: "Assignment"
+          },
+          setting: {
+            isApprovalRequired: true,
+            isRequestorJustificationRequired: true
+          }
+        }
+      ])
+    ).toEqual({
+      approval: true,
+      justification: true
+    });
+  });
 });
 
 describe("settings helpers", () => {

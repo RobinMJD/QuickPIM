@@ -9,6 +9,7 @@ import {
   normalizePimGroup
 } from "./lib/pim";
 import { azureManagementUrl, encodePathSegment, graphApiUrl } from "./lib/apiUrls";
+import { CLAIMS_CHALLENGE_MESSAGE, isClaimsChallengeMessage } from "./lib/apiErrors";
 import { mapWithConcurrency } from "./lib/concurrency";
 import {
   getRequiredGraphActivationScopes,
@@ -30,7 +31,10 @@ import {
 import { assertFreshToken, decodeToken, makeTokenStatus } from "./lib/token";
 import type {
   ActivationItem,
+  ActivationDataResult,
+  ActivationSnapshot,
   ActivationResponse,
+  ActivationStatus,
   AccessDiagnostic,
   AccessSetupTarget,
   AzureRoleApi,
@@ -118,6 +122,8 @@ async function handleMessage(message: ReturnType<typeof validateQuickPimMessage>
       return getActivationItems(message.targets);
     case "getActiveItems":
       return getActiveItems(message.targets);
+    case "getActivationSnapshot":
+      return getActivationSnapshot(message.targets);
     case "capturePortalTokens":
       return capturePortalTokens(message.tokens, message.source, sender);
     case "activateItems":
@@ -484,6 +490,100 @@ async function getActiveItems(targets: AccessSetupTarget[] = ["directoryRole", "
   };
 }
 
+interface TargetSnapshotResult {
+  target: AccessSetupTarget;
+  eligible: ActivationDataResult;
+  active: ActivationDataResult;
+}
+
+async function getActivationSnapshot(targets: AccessSetupTarget[] = ["directoryRole", "azureRole", "pimGroup"]): Promise<ActivationSnapshot> {
+  const tokens = await getStoredTokens();
+  const fetchers: Record<AccessSetupTarget, () => Promise<TargetSnapshotResult>> = {
+    directoryRole: () =>
+      fetchSnapshotGroup(
+        "directoryRole",
+        "graph",
+        getGraphTokenForTarget(tokens, "directoryRole"),
+        getDirectoryRoleSnapshot
+      ),
+    azureRole: () =>
+      fetchSnapshotGroup(
+        "azureRole",
+        "azureManagement",
+        tokens.azureManagementToken,
+        getAzureRoleSnapshot
+      ),
+    pimGroup: () =>
+      fetchSnapshotGroup(
+        "pimGroup",
+        "graph",
+        getGraphTokenForTarget(tokens, "pimGroup"),
+        getPimGroupSnapshot
+      )
+  };
+  const results = await Promise.all(targets.map((target) => fetchers[target]()));
+  return {
+    eligible: combineSnapshotResults(results, "eligible"),
+    active: combineSnapshotResults(results, "active"),
+    eligibleByTarget: Object.fromEntries(results.map((result) => [result.target, result.eligible])),
+    activeByTarget: Object.fromEntries(results.map((result) => [result.target, result.active]))
+  };
+}
+
+async function fetchSnapshotGroup(
+  target: AccessSetupTarget,
+  tokenKind: TokenKind,
+  token: string | undefined,
+  fetcher: (token: string) => Promise<[ActivationItem[], ActivationItem[]]>
+): Promise<TargetSnapshotResult> {
+  if (!token) {
+    const error = tokenKind === "graph" ? "Graph token is missing." : "Azure Management token is missing.";
+    return {
+      target,
+      eligible: makeSnapshotData(target, [], error),
+      active: makeSnapshotData(target, [], error)
+    };
+  }
+
+  try {
+    const [eligibleItems, activeItems] = await fetcher(token);
+    return {
+      target,
+      eligible: makeSnapshotData(target, eligibleItems),
+      active: makeSnapshotData(target, activeItems)
+    };
+  } catch (error) {
+    const sanitized = sanitizeErrorMessage(error);
+    return {
+      target,
+      eligible: makeSnapshotData(target, [], sanitized),
+      active: makeSnapshotData(target, [], sanitized)
+    };
+  }
+}
+
+function makeSnapshotData(target: AccessSetupTarget, items: ActivationItem[], error?: string): ActivationDataResult {
+  const checkedAt = new Date().toISOString();
+  return {
+    items,
+    errors: error ? [error] : [],
+    diagnostics: [{
+      target,
+      success: !error,
+      checkedAt,
+      ...(error ? { error } : {})
+    }]
+  };
+}
+
+function combineSnapshotResults(results: TargetSnapshotResult[], bucket: "eligible" | "active"): ActivationDataResult {
+  return {
+    items: dedupeItems(results.flatMap((result) => result[bucket].items)),
+    errors: results.flatMap((result) => result[bucket].errors),
+    diagnostics: results.flatMap((result) => result[bucket].diagnostics || [])
+  };
+}
+
 function getGraphTokenForTarget(tokens: StoredTokens, target: GraphTokenTarget): string | undefined {
   return getStoredGraphTokenForTarget(tokens, target) || tokens.graphToken;
 }
@@ -564,6 +664,105 @@ async function getDirectoryRoles(graphToken: string): Promise<ActivationItem[]> 
         policyRequirements[(namedRole.roleDefinition?.templateId || "").toLowerCase()]
     );
   });
+}
+
+async function getDirectoryRoleSnapshot(graphToken: string): Promise<[ActivationItem[], ActivationItem[]]> {
+  assertFreshToken(graphToken, "graph");
+  const principalId = await getPrincipalId(graphToken);
+  const eligibleQuery = new URLSearchParams({
+    "$filter": `principalId eq '${principalId}'`,
+    "$expand": "roleDefinition"
+  });
+  const [eligibleRoles, assignmentRequests] = await Promise.all([
+    fetchAllPages<DirectoryRoleApi>(
+      graphApiUrl(`/v1.0/roleManagement/directory/roleEligibilitySchedules?${eligibleQuery.toString()}`),
+      graphToken
+    ),
+    fetchAllPages<DirectoryRoleApi>(
+      graphApiUrl("/v1.0/roleManagement/directory/roleAssignmentScheduleRequests/filterByCurrentUser(on='principal')"),
+      graphToken
+    )
+  ]);
+  const [definitions, scopeNames, policyRequirements] = await Promise.all([
+    getDirectoryRoleDefinitionsBestEffort(graphToken),
+    getDirectoryScopeNamesBestEffort(graphToken, [...eligibleRoles, ...assignmentRequests]),
+    getDirectoryRolePolicyRequirementsBestEffort(graphToken)
+  ]);
+  const eligible = eligibleRoles.map((role) => {
+    const namedRole = withDirectoryRoleScopeName(withDirectoryRoleDefinitionName(role, definitions), scopeNames);
+    const item = normalizeDirectoryRole(namedRole);
+    return applyActivationRequirements(
+      item,
+      policyRequirements[item.roleDefinitionId.toLowerCase()] ||
+        policyRequirements[(namedRole.roleDefinition?.id || "").toLowerCase()] ||
+        policyRequirements[(namedRole.roleDefinition?.templateId || "").toLowerCase()]
+    );
+  });
+  const active = getDirectoryRoleRequestItems(assignmentRequests, definitions, scopeNames, policyRequirements);
+  return [eligible, active];
+}
+
+function getDirectoryRoleRequestItems(
+  requests: DirectoryRoleApi[],
+  definitions: Record<string, DirectoryRoleDefinitionInfo>,
+  scopeNames: Record<string, string>,
+  policyRequirements: Record<string, Partial<ActivationRequirements>> = {}
+): ActivationItem[] {
+  const now = Date.now();
+  return requests
+    .map((role) => {
+      const status = getScheduleRequestActivationStatus(role);
+      const activeUntil = getActiveUntilFromScheduleInfo(role.scheduleInfo);
+      return { role, status, activeUntil };
+    })
+    .filter((request): request is { role: DirectoryRoleApi; status: Exclude<ActivationStatus, "eligible">; activeUntil: string | undefined } =>
+      Boolean(request.status) && (request.status === "pendingApproval" || !request.activeUntil || new Date(request.activeUntil).getTime() > now)
+    )
+    .map(({ role, status, activeUntil }) => {
+      const namedRole = withDirectoryRoleScopeName(withDirectoryRoleDefinitionName(role, definitions), scopeNames);
+      const item = normalizeDirectoryRole(namedRole);
+      return {
+        ...applyActivationRequirements(
+          item,
+          policyRequirements[item.roleDefinitionId.toLowerCase()] ||
+            policyRequirements[(namedRole.roleDefinition?.id || "").toLowerCase()] ||
+            policyRequirements[(namedRole.roleDefinition?.templateId || "").toLowerCase()]
+        ),
+        status,
+        ...(status === "active" && activeUntil ? { activeUntil } : {})
+      };
+    });
+}
+
+function getScheduleRequestActivationStatus(request: { action?: string; status?: string }): Exclude<ActivationStatus, "eligible"> | undefined {
+  if (!isSelfActivateRequest(request)) {
+    return undefined;
+  }
+  if (isActiveRequestStatus(request.status)) {
+    return "active";
+  }
+  if (isPendingApprovalRequestStatus(request.status)) {
+    return "pendingApproval";
+  }
+  return undefined;
+}
+
+function isSelfActivateRequest(request: { action?: string }): boolean {
+  return !request.action || request.action.replace(/\s+/g, "").toLowerCase() === "selfactivate";
+}
+
+function isActiveRequestStatus(status: string | undefined): boolean {
+  const normalized = normalizeRequestStatus(status);
+  return normalized === "provisioned" || normalized === "granted";
+}
+
+function isPendingApprovalRequestStatus(status: string | undefined): boolean {
+  const normalized = normalizeRequestStatus(status);
+  return Boolean(normalized) && normalized.includes("pending") && (normalized.includes("approval") || normalized.includes("admin"));
+}
+
+function normalizeRequestStatus(status: string | undefined): string {
+  return (status || "").replace(/[\s_-]+/g, "").toLowerCase();
 }
 
 interface DirectoryRoleDefinitionInfo {
@@ -744,6 +943,74 @@ async function getPimGroups(graphToken: string): Promise<ActivationItem[]> {
   });
 }
 
+async function getPimGroupSnapshot(graphToken: string): Promise<[ActivationItem[], ActivationItem[]]> {
+  assertFreshToken(graphToken, "graph");
+  const [eligibleSchedules, activeSchedules, assignmentRequests] = await Promise.all([
+    fetchAllPages<PimGroupApi>(
+      graphApiUrl("/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules/filterByCurrentUser(on='principal')"),
+      graphToken
+    ),
+    fetchAllPages<PimGroupApi>(
+      graphApiUrl("/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules/filterByCurrentUser(on='principal')"),
+      graphToken
+    ),
+    fetchAllPages<PimGroupApi>(
+      graphApiUrl("/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests/filterByCurrentUser(on='principal')"),
+      graphToken
+    )
+  ]);
+  const groupIds = [
+    ...new Set(
+      [...eligibleSchedules, ...activeSchedules, ...assignmentRequests]
+        .map((schedule) => schedule.groupId)
+        .filter(Boolean) as string[]
+    )
+  ];
+  const [groupInfos, policyRequirements] = await Promise.all([
+    getGroupInfos(graphToken, groupIds),
+    getPimGroupPolicyRequirementsBestEffort(
+      graphToken,
+      groupIds
+    )
+  ]);
+  const eligible = eligibleSchedules.map((schedule) => {
+    const item = normalizePimGroup(schedule, groupInfos[schedule.groupId || ""]);
+    const groupPolicy = policyRequirements[item.groupId];
+    return applyActivationRequirements(item, groupPolicy?.[item.accessId] || groupPolicy?.default);
+  });
+  const now = Date.now();
+  const active = activeSchedules
+    .map((schedule) => {
+      const activeUntil = schedule.endDateTime || getActiveUntilFromScheduleInfo(schedule.scheduleInfo);
+      return { schedule, activeUntil };
+    })
+    .filter(({ activeUntil }) => !activeUntil || new Date(activeUntil).getTime() > now)
+    .map(({ schedule, activeUntil }) => ({
+      ...normalizePimGroup(schedule, groupInfos[schedule.groupId || ""]),
+      status: "active" as const,
+      ...(activeUntil ? { activeUntil: new Date(activeUntil).toISOString() } : {})
+    }));
+  const pending = getPimGroupPendingRequestItems(assignmentRequests, groupInfos, policyRequirements);
+  return [eligible, [...pending, ...active]];
+}
+
+function getPimGroupPendingRequestItems(
+  requests: PimGroupApi[],
+  groupInfos: Record<string, GroupInfo>,
+  policyRequirements: Record<string, Record<string, Partial<ActivationRequirements>>>
+): ActivationItem[] {
+  return requests
+    .filter((request) => getScheduleRequestActivationStatus(request) === "pendingApproval")
+    .map((request) => {
+      const item = normalizePimGroup(request, groupInfos[request.groupId || ""]);
+      const groupPolicy = policyRequirements[item.groupId];
+      return {
+        ...applyActivationRequirements(item, groupPolicy?.[item.accessId] || groupPolicy?.default),
+        status: "pendingApproval" as const
+      };
+    });
+}
+
 async function getPimGroupPolicyRequirementsBestEffort(
   graphToken: string,
   groupIds: string[]
@@ -801,6 +1068,22 @@ async function getGroupInfos(graphToken: string, groupIds: string[]): Promise<Re
 async function getAzureRoles(azureManagementToken: string): Promise<ActivationItem[]> {
   assertFreshToken(azureManagementToken, "azureManagement");
   const subscriptions = await getSubscriptions(azureManagementToken);
+  return getAzureRolesForSubscriptions(azureManagementToken, subscriptions);
+}
+
+async function getAzureRoleSnapshot(azureManagementToken: string): Promise<[ActivationItem[], ActivationItem[]]> {
+  assertFreshToken(azureManagementToken, "azureManagement");
+  const subscriptions = await getSubscriptions(azureManagementToken);
+  return Promise.all([
+    getAzureRolesForSubscriptions(azureManagementToken, subscriptions),
+    getActiveAzureRolesForSubscriptions(azureManagementToken, subscriptions)
+  ]);
+}
+
+async function getAzureRolesForSubscriptions(
+  azureManagementToken: string,
+  subscriptions: Array<{ subscriptionId: string; displayName: string }>
+): Promise<ActivationItem[]> {
   const roleGroups = await Promise.allSettled(
     subscriptions.map(async (subscription) => {
       const roles = await fetchAllPages<AzureRoleApi>(
@@ -875,25 +1158,19 @@ async function getActiveDirectoryRoles(graphToken: string): Promise<ActivationIt
     getDirectoryRoleDefinitionsBestEffort(graphToken),
     getDirectoryScopeNamesBestEffort(graphToken, roles)
   ]);
-  const now = Date.now();
-
-  return roles
-    .filter((role) => role.action === "selfActivate" && ["Provisioned", "Granted"].includes(role.status || ""))
-    .map((role) => {
-      const activeUntil = getActiveUntilFromScheduleInfo(role.scheduleInfo);
-      return { role, activeUntil };
-    })
-    .filter(({ activeUntil }) => !activeUntil || new Date(activeUntil).getTime() > now)
-    .map(({ role, activeUntil }) => ({
-      ...normalizeDirectoryRole(withDirectoryRoleScopeName(withDirectoryRoleDefinitionName(role, definitions), scopeNames)),
-      status: "active" as const,
-      ...(activeUntil ? { activeUntil } : {})
-    }));
+  return getDirectoryRoleRequestItems(roles, definitions, scopeNames);
 }
 
 async function getActiveAzureRoles(azureManagementToken: string): Promise<ActivationItem[]> {
   assertFreshToken(azureManagementToken, "azureManagement");
   const subscriptions = await getSubscriptions(azureManagementToken);
+  return getActiveAzureRolesForSubscriptions(azureManagementToken, subscriptions);
+}
+
+async function getActiveAzureRolesForSubscriptions(
+  azureManagementToken: string,
+  subscriptions: Array<{ subscriptionId: string; displayName: string }>
+): Promise<ActivationItem[]> {
   const now = Date.now();
   const roleGroups = await Promise.allSettled(
     subscriptions.map(async (subscription) => {
@@ -979,16 +1256,29 @@ async function applyAzureRoleDefinitionMetadata(items: ActivationItem[], token: 
 
 async function getActivePimGroups(graphToken: string): Promise<ActivationItem[]> {
   assertFreshToken(graphToken, "graph");
-  const schedules = await fetchAllPages<PimGroupApi>(
-    graphApiUrl("/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules/filterByCurrentUser(on='principal')"),
-    graphToken
-  );
-  const groupInfos = await getGroupInfos(
-    graphToken,
-    [...new Set(schedules.map((schedule) => schedule.groupId).filter(Boolean) as string[])]
-  );
+  const [schedules, assignmentRequests] = await Promise.all([
+    fetchAllPages<PimGroupApi>(
+      graphApiUrl("/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules/filterByCurrentUser(on='principal')"),
+      graphToken
+    ),
+    fetchAllPages<PimGroupApi>(
+      graphApiUrl("/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests/filterByCurrentUser(on='principal')"),
+      graphToken
+    )
+  ]);
+  const groupIds = [
+    ...new Set(
+      [...schedules, ...assignmentRequests]
+        .map((schedule) => schedule.groupId)
+        .filter(Boolean) as string[]
+    )
+  ];
+  const [groupInfos, policyRequirements] = await Promise.all([
+    getGroupInfos(graphToken, groupIds),
+    getPimGroupPolicyRequirementsBestEffort(graphToken, groupIds)
+  ]);
   const now = Date.now();
-  return schedules
+  const active = schedules
     .map((schedule) => {
       const activeUntil = schedule.endDateTime || getActiveUntilFromScheduleInfo(schedule.scheduleInfo);
       return { schedule, activeUntil };
@@ -999,6 +1289,7 @@ async function getActivePimGroups(graphToken: string): Promise<ActivationItem[]>
       status: "active" as const,
       ...(activeUntil ? { activeUntil: new Date(activeUntil).toISOString() } : {})
     }));
+  return [...getPimGroupPendingRequestItems(assignmentRequests, groupInfos, policyRequirements), ...active];
 }
 
 async function activateItems(
@@ -1042,7 +1333,7 @@ async function activateItems(
 
         if (!response.ok) {
           const errorData = await safeJson(response);
-          throw new Error(sanitizeErrorMessage(getApiErrorMessage(errorData) || `${response.status} ${response.statusText}`));
+          throw new Error(sanitizeErrorMessage(getApiErrorMessage(errorData, response) || `${response.status} ${response.statusText}`));
         }
 
         const data = await safeJson(response);
@@ -1122,7 +1413,7 @@ async function fetchJson<T>(url: string, token: string): Promise<T> {
 
   if (!response.ok) {
     const errorData = await safeJson(response);
-    throw new Error(sanitizeErrorMessage(getApiErrorMessage(errorData) || `${response.status} ${response.statusText}`));
+    throw new Error(sanitizeErrorMessage(getApiErrorMessage(errorData, response) || `${response.status} ${response.statusText}`));
   }
 
   return (await response.json()) as T;
@@ -1140,7 +1431,12 @@ function dedupeItems(items: ActivationItem[]): ActivationItem[] {
   return [...new Map(items.map((item) => [item.id, item])).values()];
 }
 
-function getApiErrorMessage(payload: unknown): string | undefined {
+function getApiErrorMessage(payload: unknown, response?: Response): string | undefined {
+  const authenticateHeader = response?.headers.get("www-authenticate") || response?.headers.get("WWW-Authenticate");
+  if (authenticateHeader && isClaimsChallengeMessage(authenticateHeader)) {
+    return CLAIMS_CHALLENGE_MESSAGE;
+  }
+
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return undefined;
   }
@@ -1149,7 +1445,10 @@ function getApiErrorMessage(payload: unknown): string | undefined {
     return undefined;
   }
   const message = (error as Record<string, unknown>).message;
-  return typeof message === "string" ? message : undefined;
+  if (typeof message !== "string") {
+    return undefined;
+  }
+  return isClaimsChallengeMessage(message) ? CLAIMS_CHALLENGE_MESSAGE : message;
 }
 
 function getResponseIdentifier(payload: unknown): string | undefined {

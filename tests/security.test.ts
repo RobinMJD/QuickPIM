@@ -73,6 +73,16 @@ describe("security allowlists and token validation", () => {
     expect(message).toContain("[redacted token]");
     expect(message.length).toBeLessThanOrEqual(260);
   });
+
+  test("replaces encoded claims challenges with a useful action", () => {
+    const claims = encodeURIComponent(JSON.stringify({ access_token: { acrs: { essential: true, value: "c1" } } }));
+    const message = sanitizeErrorMessage(`Authorization failed. &claims=${claims}`);
+
+    expect(message).toBe(
+      "Microsoft requires an additional sign-in or MFA challenge before this activation can continue. Open the matching Microsoft portal page, complete the prompt, then retry."
+    );
+    expect(message).not.toContain(claims);
+  });
 });
 
 describe("Graph token capability detection", () => {
@@ -112,6 +122,10 @@ describe("Graph token capability detection", () => {
 describe("runtime message validation", () => {
   test("rejects unsupported and malformed privileged messages", () => {
     expect(validateQuickPimMessage({ action: "getTokenStatus" })).toEqual({ action: "getTokenStatus" });
+    expect(validateQuickPimMessage({ action: "getActivationSnapshot", targets: ["directoryRole", "directoryRole", "azureRole"] })).toEqual({
+      action: "getActivationSnapshot",
+      targets: ["directoryRole", "azureRole"]
+    });
     expect(validateQuickPimMessage({ action: "capturePortalTokens", tokens: ["a.b.c"], source: "entra" })).toEqual({
       action: "capturePortalTokens",
       tokens: ["a.b.c"],

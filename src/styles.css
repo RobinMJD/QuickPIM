@@ -418,6 +418,10 @@ button {
   background: #fbfdfc;
 }
 
+.role-row.pending-row {
+  background: #fffaf0;
+}
+
 .role-title {
   display: inline-flex;
   align-items: center;
@@ -542,6 +546,11 @@ button {
 .status-badge.active {
   background: #dcfce7;
   color: #166534;
+}
+
+.status-badge.pendingApproval {
+  background: #fef3c7;
+  color: #92400e;
 }
 
 .btn {
@@ -840,6 +849,9 @@ a.btn {
 }
 
 .activation-progress-panel {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -1246,6 +1258,10 @@ body.dark-mode .role-row.active-row {
   background: #10251b;
 }
 
+body.dark-mode .role-row.pending-row {
+  background: #2b2111;
+}
+
 body.dark-mode .input,
 body.dark-mode .select,
 body.dark-mode .textarea,
@@ -1344,6 +1360,11 @@ body.dark-mode .status-badge.active,
 body.dark-mode .permission-state.ok {
   background: #14532d;
   color: #bbf7d0;
+}
+
+body.dark-mode .status-badge.pendingApproval {
+  background: #78350f;
+  color: #fde68a;
 }
 
 body.dark-mode .token-pill.warn {

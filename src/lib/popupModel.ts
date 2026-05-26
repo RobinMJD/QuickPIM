@@ -1,4 +1,5 @@
-import type { ActivationItem, PopupTab, RoleTab, TokenStatusEntry } from "./types";
+import { CLAIMS_CHALLENGE_MESSAGE, isClaimsChallengeMessage } from "./apiErrors";
+import type { ActivationItem, ActivationResult, ActivationStatus, PopupTab, RoleTab, TokenStatusEntry } from "./types";
 export type { PopupTab, RoleTab } from "./types";
 
 export const ENTRA_PORTAL_URLS: Record<RoleTab, string> = {
@@ -48,6 +49,14 @@ export function formatLoadMessages(messages: string[]): string[] {
       seen.add(message);
       return true;
     });
+}
+
+export function getRemainingSelectedIdsAfterActivationResults(
+  selectedIds: Iterable<string>,
+  results: ActivationResult[]
+): Set<string> {
+  const successfulIds = new Set(results.filter((result) => result.success).map((result) => result.itemId));
+  return new Set([...selectedIds].filter((itemId) => !successfulIds.has(itemId)));
 }
 
 export function getDurationOptions(items: ActivationItem[]): Array<{ value: number; label: string }> {
@@ -122,10 +131,27 @@ export function tabLabel(tab: PopupTab): string {
 }
 
 export function mergeEligibleWithActive(eligibleItems: ActivationItem[], activeItems: ActivationItem[]): ActivationItem[] {
-  const activeById = new Map(activeItems.map((item) => [item.id, item]));
+  const activeById = new Map<string, ActivationItem>();
+  for (const item of activeItems) {
+    const current = activeById.get(item.id);
+    if (!current || item.status === "active" || current.status !== "active") {
+      activeById.set(item.id, item);
+    }
+  }
   return eligibleItems.map((item) => {
     const activeItem = activeById.get(item.id);
-    return activeItem ? { ...item, status: "active", activeUntil: activeItem.activeUntil || item.activeUntil } : item;
+    const activationRequirements = {
+      ...item.activationRequirements,
+      ...activeItem?.activationRequirements
+    };
+    return activeItem
+      ? {
+          ...item,
+          status: activeItem.status,
+          activeUntil: activeItem.activeUntil || item.activeUntil,
+          ...(Object.keys(activationRequirements).length ? { activationRequirements } : {})
+        }
+      : item;
   });
 }
 
@@ -148,6 +174,22 @@ export function getActiveStatusTitle(item: ActivationItem, now = Date.now()): st
   const activeUntil = item.activeUntil.replace("T", " ").slice(0, 16);
   const remaining = formatRemainingTime(activeUntilMs - now);
   return remaining ? `Active until ${activeUntil} (${remaining} remaining)` : `Active until ${activeUntil}`;
+}
+
+export function getActivationStatusTitle(item: ActivationItem, now = Date.now()): string | undefined {
+  if (item.status === "pendingApproval") {
+    return item.activationRequirements?.approval
+      ? "Activation request is waiting for approval."
+      : "Activation request is pending.";
+  }
+  return getActiveStatusTitle(item, now);
+}
+
+export function formatActivationStatusLabel(status: ActivationStatus): string {
+  if (status === "pendingApproval") {
+    return "Pending approval";
+  }
+  return status;
 }
 
 function formatRemainingTime(remainingMs: number): string {
@@ -176,6 +218,10 @@ function formatLoadMessage(message: string): string {
   const messageText = getParsedMessageText(parsed) || trimmed;
   const missingScopes = extractMissingPermissionScopes(messageText) || extractMissingPermissionScopes(trimmed);
   const errorCode = typeof parsed?.errorCode === "string" ? parsed.errorCode : undefined;
+
+  if (isClaimsChallengeMessage(messageText) || isClaimsChallengeMessage(trimmed)) {
+    return CLAIMS_CHALLENGE_MESSAGE;
+  }
 
   if (isTokenExpiryMessage(messageText)) {
     return "Captured token expired. Refresh in portal.";

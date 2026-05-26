@@ -4,24 +4,31 @@ import "../styles.css";
 import {
   DEFAULT_ACTIVE_CACHE_TTL_MS,
   DEFAULT_ELIGIBLE_CACHE_TTL_MS,
-  getActivationDataWithCache,
+  STALE_ELIGIBLE_CACHE_TTL_MS,
+  getTargetEntriesFromCache,
   loadDataCache,
-  saveDataCache
+  mergeTargetEntries,
+  saveDataCache,
+  splitActivationResultByTarget,
+  updateCacheFromTargetResults
 } from "../lib/cache";
 import {
   buildAccessCapabilityItems,
   buildTokenCacheKey,
+  buildTargetCacheKeys,
   getAccessSetupTargets,
   type AccessCapabilityItem
 } from "../lib/access";
 import { filterLoadErrorsForAccessState } from "../lib/accessMessages";
 import {
   coerceDurationForItems,
+  formatActivationStatusLabel,
   formatLoadMessages,
   getActivationRequirements,
+  getActivationStatusTitle,
   getActivatableItems,
-  getActiveStatusTitle,
   getDurationOptions,
+  getRemainingSelectedIdsAfterActivationResults,
   isHighPrivilegeItem,
   mergeEligibleWithActive,
   getPortalUrlForTab,
@@ -55,11 +62,13 @@ import {
 } from "../lib/referenceData";
 import { getGenericJustificationWarning } from "../lib/justifications";
 import type {
-  AccessDiagnostic,
+  AccessSetupTarget,
+  ActivationSnapshot,
   ActivationItem,
   ActivationResponse,
   QuickPimBundle,
   QuickPimFeature,
+  QuickPimDataCache,
   ReferenceDataCache,
   QuickPimSettings,
   SortMode,
@@ -103,6 +112,7 @@ function PopupApp() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isActivationReviewOpen, setIsActivationReviewOpen] = useState(false);
   const [activationProgress, setActivationProgress] = useState<LoadingProgress | null>(null);
   const [isActivating, setIsActivating] = useState(false);
@@ -124,6 +134,7 @@ function PopupApp() {
     () => mergeEligibleWithActive(eligibleItems, activeItems),
     [activeItems, eligibleItems]
   );
+  const activatableItemCount = useMemo(() => getActivatableItems(displayItems).length, [displayItems]);
   const itemsById = useMemo(() => new Map(displayItems.map((item) => [item.id, item])), [displayItems]);
   const enabledFeatures = useMemo(() => new Set<QuickPimFeature>(settings.preferences.enabledFeatures || []), [settings.preferences.enabledFeatures]);
   const itemTypesWithData = useMemo(() => new Set(displayItems.map((item) => item.type)), [displayItems]);
@@ -194,58 +205,103 @@ function PopupApp() {
     return sortItems(filtered, settings, sortMode, referenceData);
   }, [displayItems, referenceData, search, settings, sortMode, tab]);
 
-  async function refresh(options: { force: boolean; showLoading?: boolean; suppressMessage?: boolean }) {
-    const showLoading = options.showLoading !== false;
-    if (showLoading) {
-      setIsLoading(true);
-    }
+  async function refresh(options: { force: boolean; showLoading?: boolean; suppressMessage?: boolean; targets?: AccessSetupTarget[] }) {
+    const showBlockingLoading = options.showLoading !== false;
     if (!options.suppressMessage) {
       setError("");
     }
     try {
-      const localDataPromise = Promise.all([
+      const [
+        loadedSettings,
+        currentCache,
+        loadedReferenceData,
+        loadedTokens
+      ] = await Promise.all([
         loadSettings(),
         loadDataCache(),
-        loadReferenceData()
+        loadReferenceData(),
+        sendMessage<TokenStatus>({ action: "getTokenStatus" })
       ]);
-      const tokenPromise = sendMessage<TokenStatus>({ action: "getTokenStatus" });
-      const [loadedSettings, currentCache, loadedReferenceData] = await localDataPromise;
-      const loadedTokens = await tokenPromise;
-
       const now = Date.now();
       const tokenCacheKey = buildTokenCacheKey(loadedTokens);
       const enabledRoleFeatures = getEnabledRoleFeatures(loadedSettings);
-      const featureCacheKey = buildFeatureCacheKey(tokenCacheKey, enabledRoleFeatures);
-      const fetchEnabledItems = (action: "getActivationItems" | "getActiveItems") =>
-        enabledRoleFeatures.length
-          ? sendMessage<{ items: ActivationItem[]; errors: string[]; diagnostics?: AccessDiagnostic[] }>({
-              action,
-              targets: enabledRoleFeatures
-            })
-          : Promise.resolve({ items: [], errors: [], diagnostics: [] });
-      const { eligible, active, cache: nextCache } = await getActivationDataWithCache({
-        cache: currentCache,
-        eligibleTtlMs: DEFAULT_ELIGIBLE_CACHE_TTL_MS,
-        activeTtlMs: DEFAULT_ACTIVE_CACHE_TTL_MS,
-        force: options.force,
+      const refreshTargets = normalizeRefreshTargets(options.targets || enabledRoleFeatures, enabledRoleFeatures);
+      const targetCacheKeys = buildTargetCacheKeys(loadedTokens, enabledRoleFeatures);
+      const legacyCacheKey = buildFeatureCacheKey(tokenCacheKey, enabledRoleFeatures);
+      const eligibleCache = getTargetEntriesFromCache(currentCache, "eligible", enabledRoleFeatures, targetCacheKeys, {
+        legacyCacheKey,
         now,
-        tokenCacheKey: featureCacheKey,
-        fetchEligible: () => fetchEnabledItems("getActivationItems"),
-        fetchActive: () => fetchEnabledItems("getActiveItems")
+        freshTtlMs: DEFAULT_ELIGIBLE_CACHE_TTL_MS,
+        usableTtlMs: STALE_ELIGIBLE_CACHE_TTL_MS
       });
+      const activeCache = getTargetEntriesFromCache(currentCache, "active", enabledRoleFeatures, targetCacheKeys, {
+        legacyCacheKey,
+        now,
+        freshTtlMs: DEFAULT_ACTIVE_CACHE_TTL_MS
+      });
+      const cachedEligible = mergeTargetEntries(enabledRoleFeatures.map((target) => eligibleCache[target]?.entry), now, legacyCacheKey);
+      const cachedActive = mergeTargetEntries(enabledRoleFeatures.map((target) => activeCache[target]?.entry), now, legacyCacheKey);
+      const canShowCachedData = !options.force && cachedEligible.items.length > 0;
+
+      if (canShowCachedData) {
+        await applyLoadedActivationData(loadedSettings, loadedTokens, currentCache, loadedReferenceData, cachedEligible, cachedActive);
+        setIsLoading(false);
+      } else if (showBlockingLoading) {
+        setIsLoading(true);
+      } else {
+        setIsRefreshing(true);
+      }
+
+      const staleTargets = refreshTargets.filter(
+        (target) => options.force || !eligibleCache[target]?.isFresh || !activeCache[target]?.isFresh
+      );
+      if (!staleTargets.length) {
+        if (!canShowCachedData) {
+          await applyLoadedActivationData(loadedSettings, loadedTokens, currentCache, loadedReferenceData, cachedEligible, cachedActive);
+        }
+        if (!options.suppressMessage) {
+          setMessage("");
+        }
+        return;
+      }
+
+      if (canShowCachedData || !showBlockingLoading) {
+        setIsRefreshing(true);
+        if (!options.suppressMessage) {
+          setMessage(options.force ? "Refreshing access data..." : "Refreshing stale access data...");
+        }
+      }
+
+      const snapshot = await fetchActivationSnapshot(staleTargets);
+      const fetchedAt = Date.now();
+      let nextCache = updateCacheFromTargetResults(
+        currentCache,
+        "eligible",
+        staleTargets,
+        snapshot.eligibleByTarget || splitActivationResultByTarget(snapshot.eligible, staleTargets),
+        fetchedAt,
+        targetCacheKeys
+      );
+      nextCache = updateCacheFromTargetResults(
+        nextCache,
+        "active",
+        staleTargets,
+        snapshot.activeByTarget || splitActivationResultByTarget(snapshot.active, staleTargets),
+        fetchedAt,
+        targetCacheKeys
+      );
 
       let nextSettings = loadedSettings;
       if (
         !loadedSettings.preferences.autoEnabledFeaturesInitialized &&
-        (!eligible.fromCache || !active.fromCache) &&
-        eligible.entry.items.length > 0
+        snapshot.eligible.items.length > 0
       ) {
         nextSettings = {
           ...loadedSettings,
           preferences: {
             ...loadedSettings.preferences,
             enabledFeatures: getAutoEnabledFeatures(
-              eligible.entry.items,
+              snapshot.eligible.items,
               loadedSettings.preferences.enabledFeatures?.includes("bundles") !== false
             ),
             autoEnabledFeaturesInitialized: true
@@ -254,35 +310,52 @@ function PopupApp() {
         await saveSettings(nextSettings);
       }
 
-      if (!eligible.fromCache || !active.fromCache) {
-        await saveDataCache(nextCache);
-      }
-      const nextReferenceData = learnReferenceDataFromItems(loadedReferenceData, [...eligible.entry.items, ...active.entry.items]);
-      await saveReferenceData(nextReferenceData);
-
+      await saveDataCache(nextCache);
+      const nextTargetCacheKeys = buildTargetCacheKeys(loadedTokens, getEnabledRoleFeatures(nextSettings));
+      const nextEligibleCache = getTargetEntriesFromCache(nextCache, "eligible", getEnabledRoleFeatures(nextSettings), nextTargetCacheKeys, {
+        legacyCacheKey: buildFeatureCacheKey(tokenCacheKey, getEnabledRoleFeatures(nextSettings)),
+        now: fetchedAt,
+        freshTtlMs: DEFAULT_ELIGIBLE_CACHE_TTL_MS,
+        usableTtlMs: STALE_ELIGIBLE_CACHE_TTL_MS
+      });
+      const nextActiveCache = getTargetEntriesFromCache(nextCache, "active", getEnabledRoleFeatures(nextSettings), nextTargetCacheKeys, {
+        legacyCacheKey: buildFeatureCacheKey(tokenCacheKey, getEnabledRoleFeatures(nextSettings)),
+        now: fetchedAt,
+        freshTtlMs: DEFAULT_ACTIVE_CACHE_TTL_MS
+      });
+      const nextEligible = mergeTargetEntries(getEnabledRoleFeatures(nextSettings).map((target) => nextEligibleCache[target]?.entry), fetchedAt);
+      const nextActive = mergeTargetEntries(getEnabledRoleFeatures(nextSettings).map((target) => nextActiveCache[target]?.entry), fetchedAt);
+      await applyLoadedActivationData(nextSettings, loadedTokens, nextCache, loadedReferenceData, nextEligible, nextActive);
       const nextAccessCapabilities = buildAccessCapabilityItems(loadedTokens, nextCache, getEnabledRoleFeatures(nextSettings));
-      const loadErrors = filterLoadErrorsForAccessState(
-        [...(eligible.entry.errors || []), ...(active.entry.errors || [])],
-        nextAccessCapabilities
-      );
-
-      setSettings(nextSettings);
-      setTokenStatus(loadedTokens);
-      setReferenceData(nextReferenceData);
-      setAccessCapabilities(nextAccessCapabilities);
-      setEligibleItems(applyDisplayData(eligible.entry.items, nextSettings, nextReferenceData));
-      setActiveItems(applyDisplayData(active.entry.items, nextSettings, nextReferenceData));
-      const cacheMessage = options.force ? "Forced refresh completed." : "";
+      const loadErrors = filterLoadErrorsForAccessState([...(snapshot.eligible.errors || []), ...(snapshot.active.errors || [])], nextAccessCapabilities);
+      const refreshMessage = options.force ? "Refresh completed." : "";
       if (!options.suppressMessage) {
-        setMessage(formatLoadMessages([...loadErrors, cacheMessage].filter(Boolean)).join("\n"));
+        setMessage(formatLoadMessages([...loadErrors, refreshMessage].filter(Boolean)).join("\n"));
       }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
-      if (showLoading) {
-        setIsLoading(false);
-      }
+      setIsLoading(false);
+      setIsRefreshing(false);
     }
+  }
+
+  async function applyLoadedActivationData(
+    nextSettings: QuickPimSettings,
+    nextTokens: TokenStatus,
+    nextCache: QuickPimDataCache,
+    loadedReferenceData: ReferenceDataCache | undefined,
+    eligible: { items: ActivationItem[]; errors: string[] },
+    active: { items: ActivationItem[]; errors: string[] }
+  ) {
+    const nextReferenceData = learnReferenceDataFromItems(loadedReferenceData || await loadReferenceData(), [...eligible.items, ...active.items]);
+    await saveReferenceData(nextReferenceData);
+    setSettings(nextSettings);
+    setTokenStatus(nextTokens);
+    setReferenceData(nextReferenceData);
+    setAccessCapabilities(buildAccessCapabilityItems(nextTokens, nextCache, getEnabledRoleFeatures(nextSettings)));
+    setEligibleItems(applyDisplayData(eligible.items, nextSettings, nextReferenceData));
+    setActiveItems(applyDisplayData(active.items, nextSettings, nextReferenceData));
   }
 
   function toggleSelected(itemId: string) {
@@ -319,7 +392,7 @@ function PopupApp() {
   async function activate(items: ActivationItem[], bundle?: QuickPimBundle) {
     const activatableItems = getActivatableItems(items);
     if (!activatableItems.length) {
-      setError(items.length ? "All selected items are already active." : "Select at least one role or group.");
+      setError(items.length ? "No selected items are currently eligible to activate." : "Select at least one role or group.");
       return;
     }
 
@@ -345,6 +418,7 @@ function PopupApp() {
 
     setIsActivating(true);
     setActivationProgress(ACTIVATION_STEPS[0]);
+    scrollPopupToTop();
     setError("");
     setMessage("");
     try {
@@ -365,13 +439,18 @@ function PopupApp() {
       updatedSettings = recordActivations(updatedSettings, successItems, new Date().toISOString(), bundle?.name);
       await saveSettings(updatedSettings);
       setSettings(updatedSettings);
-      setSelectedIds(new Set());
+      setSelectedIds((current) => getRemainingSelectedIdsAfterActivationResults(current, response.results));
       setActivationProgress(ACTIVATION_STEPS[2]);
       if (response.errors.length) {
         setError(response.errors.map(formatActivationError).join(" "));
       }
       if (successItems.length) {
-        await refresh({ force: true, showLoading: false, suppressMessage: true });
+        await refresh({
+          force: true,
+          showLoading: false,
+          suppressMessage: true,
+          targets: [...new Set(successItems.map((item) => item.type))]
+        });
       }
       setMessage(formatActivationConfirmation(successItems.length, response.errors.length));
     } catch (activationError) {
@@ -445,6 +524,8 @@ function PopupApp() {
   const currentRoleTab = activeTabIsVisible && roleTabs.includes(tab as RoleTab) ? tab as RoleTab : undefined;
   const portalUrl = activeTabIsVisible ? getPortalUrlForTab(tab) : undefined;
   const portalLabel = currentRoleTab ? tabLabel(currentRoleTab) : "Microsoft Entra";
+  const manualRefreshTargets: AccessSetupTarget[] = currentRoleTab ? [currentRoleTab] : getEnabledRoleFeatures(settings);
+  const manualRefreshLabel = currentRoleTab ? `Refresh ${tabLabel(currentRoleTab)} data` : "Refresh enabled data";
 
   return (
     <main className="app-shell">
@@ -454,7 +535,7 @@ function PopupApp() {
           <div>
             <h1>QuickPIM++</h1>
             <p>
-              {isLoading ? null : `${displayItems.length} eligible items`}
+              {isLoading ? null : `${activatableItemCount} eligible items`}
             </p>
           </div>
         </div>
@@ -462,7 +543,13 @@ function PopupApp() {
           <TokenPill label="Graph" status={tokenStatus?.graph} />
           <TokenPill label="Azure" status={tokenStatus?.azureManagement} />
           <div className="header-actions" aria-label="Popup actions">
-            <button className="btn icon-btn" onClick={() => void refresh({ force: true })} disabled={isLoading} title="Force refresh all data" aria-label="Force refresh all data">
+            <button
+              className="btn icon-btn"
+              onClick={() => void refresh({ force: true, showLoading: false, targets: manualRefreshTargets })}
+              disabled={isLoading || isRefreshing}
+              title={manualRefreshLabel}
+              aria-label={manualRefreshLabel}
+            >
               <RefreshIcon />
             </button>
             <button className="btn icon-btn" onClick={openPortalForCurrentTab} disabled={!portalUrl} title={`Open ${portalLabel} in Microsoft Entra`} aria-label={`Open ${portalLabel} in Microsoft Entra`}>
@@ -684,7 +771,7 @@ function RoleList({
         const selected = isSelectable && selectedIds.has(item.id);
         const displayName = getDisplayName(item, settings, referenceData);
         const isFavorite = favoriteIds.has(item.id);
-        const activeTitle = getActiveStatusTitle(item);
+        const statusTitle = getActivationStatusTitle(item);
         const body = (
           <>
             <button
@@ -714,8 +801,8 @@ function RoleList({
               <span className="activation-count" title={`${usage.activationCount} activation${usage.activationCount === 1 ? "" : "s"}`}>
                 {usage.activationCount}
               </span>
-              <span className={`badge status-badge ${item.status}`} title={activeTitle}>
-                {item.status}
+              <span className={`badge status-badge ${item.status}`} title={statusTitle}>
+                {formatActivationStatusLabel(item.status)}
               </span>
             </div>
           </>
@@ -723,7 +810,7 @@ function RoleList({
 
         if (!isSelectable) {
           return (
-            <div className={`role-row readonly ${item.status === "active" ? "active-row" : ""}`} key={item.id}>
+            <div className={`role-row readonly ${item.status === "active" ? "active-row" : item.status === "pendingApproval" ? "pending-row" : ""}`} key={item.id}>
               {body}
             </div>
           );
@@ -1006,12 +1093,70 @@ function typeLabel(type: ActivationItem["type"]) {
 function formatActivationConfirmation(successCount: number, errorCount: number): string {
   const itemLabel = (count: number) => `item${count === 1 ? "" : "s"}`;
   if (successCount && !errorCount) {
-    return `Activation confirmed for ${successCount} ${itemLabel(successCount)}.`;
+    return `Activation request submitted for ${successCount} ${itemLabel(successCount)}.`;
   }
   if (successCount && errorCount) {
-    return `Activation confirmed for ${successCount} ${itemLabel(successCount)}; ${errorCount} failed.`;
+    return `Activation request submitted for ${successCount} ${itemLabel(successCount)}; ${errorCount} failed.`;
   }
   return `Activation failed for ${errorCount} ${itemLabel(errorCount)}.`;
+}
+
+function scrollPopupToTop(): void {
+  const scrollingElement = document.scrollingElement || document.documentElement;
+  if (typeof scrollingElement.scrollTo === "function") {
+    scrollingElement.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+  scrollingElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+}
+
+function normalizeRefreshTargets(targets: AccessSetupTarget[], enabledRoleFeatures: AccessSetupTarget[]): AccessSetupTarget[] {
+  const enabled = new Set(enabledRoleFeatures);
+  return targets.filter((target, index) => enabled.has(target) && targets.indexOf(target) === index);
+}
+
+async function fetchActivationSnapshot(targets: AccessSetupTarget[]): Promise<ActivationSnapshot> {
+  try {
+    const snapshot = await sendMessage<ActivationSnapshot>({
+      action: "getActivationSnapshot",
+      targets
+    });
+    if (isActivationSnapshot(snapshot)) {
+      return snapshot;
+    }
+  } catch {
+    // Fall through to the legacy paired calls for compatibility with older/background test runtimes.
+  }
+
+  const [eligible, active] = await Promise.all([
+    sendMessage<ActivationSnapshot["eligible"]>({
+      action: "getActivationItems",
+      targets
+    }),
+    sendMessage<ActivationSnapshot["active"]>({
+      action: "getActiveItems",
+      targets
+    })
+  ]);
+  return {
+    eligible,
+    active,
+    eligibleByTarget: splitActivationResultByTarget(eligible, targets),
+    activeByTarget: splitActivationResultByTarget(active, targets)
+  };
+}
+
+function isActivationSnapshot(value: unknown): value is ActivationSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return isActivationDataResult(record.eligible) && isActivationDataResult(record.active);
+}
+
+function isActivationDataResult(value: unknown): value is ActivationSnapshot["eligible"] {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && Array.isArray((value as Record<string, unknown>).items));
 }
 
 async function sendMessage<T>(message: Record<string, unknown>): Promise<T> {

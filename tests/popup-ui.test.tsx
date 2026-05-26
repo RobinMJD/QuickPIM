@@ -173,6 +173,256 @@ describe("popup compact controls", () => {
     expect(document.body.textContent).not.toContain("Using cached data");
   });
 
+  test("renders fresh per-feature cache immediately without blocking or fetching", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    const eligibleItem: ActivationItem = {
+      id: "directoryRole:reader:/",
+      type: "directoryRole",
+      sourceName: "Reader",
+      displayName: "Reader",
+      principalId: "principal-1",
+      scopeLabel: "Tenant",
+      status: "eligible",
+      roleDefinitionId: "reader",
+      directoryScopeId: "/"
+    };
+    const storageData: Record<string, unknown> = {
+      [SETTINGS_KEY]: {
+        ...DEFAULT_SETTINGS,
+        preferences: {
+          ...DEFAULT_SETTINGS.preferences,
+          enabledFeatures: ["directoryRole", "bundles"],
+          autoEnabledFeaturesInitialized: true
+        }
+      },
+      [DATA_CACHE_KEY]: {
+        eligibleByTarget: {
+          directoryRole: {
+            fetchedAt: Date.now(),
+            cacheKey: "graphDirectory:missing",
+            errors: [],
+            items: [eligibleItem]
+          }
+        },
+        activeByTarget: {
+          directoryRole: {
+            fetchedAt: Date.now(),
+            cacheKey: "graphDirectory:missing",
+            errors: [],
+            items: []
+          },
+          pimGroup: {
+            fetchedAt: Date.now(),
+            cacheKey: "graphPimGroup:missing",
+            errors: [],
+            items: []
+          },
+          azureRole: {
+            fetchedAt: Date.now(),
+            cacheKey: "azure:missing",
+            errors: [],
+            items: []
+          }
+        }
+      }
+    };
+    const sendMessage = vi.fn((message: { action: string }) => {
+      if (message.action === "getTokenStatus") {
+        return Promise.resolve({
+          success: true,
+          data: {
+            graph: { hasToken: false },
+            azureManagement: { hasToken: false }
+          }
+        });
+      }
+      throw new Error("Fresh cache should not fetch activation data.");
+    });
+
+    vi.stubGlobal("chrome", {
+      runtime: { sendMessage },
+      storage: {
+        local: {
+          get: vi.fn(async (key: string) => ({ [key]: storageData[key] })),
+          set: vi.fn(async (value: Record<string, unknown>) => Object.assign(storageData, value)),
+          remove: vi.fn(async () => undefined)
+        }
+      },
+      tabs: { create: vi.fn() }
+    });
+    vi.resetModules();
+    await import("../src/popup/main");
+
+    await waitFor(() => expect(document.body.textContent).toContain("Reader"));
+    expect(document.body.textContent).not.toContain("Loading access data");
+    expect(sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ action: "getActivationSnapshot" }));
+  });
+
+  test("renders pending approval rows as readonly and excludes them from eligible count", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    const eligibleItem: ActivationItem = {
+      id: "directoryRole:admin:/",
+      type: "directoryRole",
+      sourceName: "User Administrator",
+      displayName: "User Administrator",
+      principalId: "principal-1",
+      scopeLabel: "Tenant",
+      status: "eligible",
+      roleDefinitionId: "admin",
+      directoryScopeId: "/",
+      activationRequirements: {
+        approval: true
+      }
+    };
+    const storageData: Record<string, unknown> = {
+      [SETTINGS_KEY]: {
+        ...DEFAULT_SETTINGS,
+        preferences: {
+          ...DEFAULT_SETTINGS.preferences,
+          enabledFeatures: ["directoryRole"],
+          autoEnabledFeaturesInitialized: true
+        }
+      },
+      [DATA_CACHE_KEY]: {
+        eligibleByTarget: {
+          directoryRole: {
+            fetchedAt: Date.now(),
+            cacheKey: "graphDirectory:missing",
+            errors: [],
+            items: [eligibleItem]
+          }
+        },
+        activeByTarget: {
+          directoryRole: {
+            fetchedAt: Date.now(),
+            cacheKey: "graphDirectory:missing",
+            errors: [],
+            items: [{ ...eligibleItem, status: "pendingApproval" }]
+          }
+        }
+      }
+    };
+
+    vi.stubGlobal("chrome", {
+      runtime: {
+        sendMessage: vi.fn((message: { action: string }) => {
+          if (message.action === "getTokenStatus") {
+            return Promise.resolve({
+              success: true,
+              data: {
+                graph: { hasToken: false },
+                azureManagement: { hasToken: false }
+              }
+            });
+          }
+          throw new Error("Fresh cache should not fetch activation data.");
+        })
+      },
+      storage: {
+        local: {
+          get: vi.fn(async (key: string) => ({ [key]: storageData[key] })),
+          set: vi.fn(async (value: Record<string, unknown>) => Object.assign(storageData, value)),
+          remove: vi.fn(async () => undefined)
+        }
+      },
+      tabs: { create: vi.fn() }
+    });
+    vi.resetModules();
+    await import("../src/popup/main");
+
+    await waitFor(() => expect(document.body.textContent).toContain("User Administrator"));
+    expect(document.body.textContent).toContain("Pending approval");
+    expect(document.body.textContent).toContain("0 eligible items");
+    expect(document.querySelector<HTMLInputElement>('input[type="checkbox"]')).toBeNull();
+  });
+
+  test("shows stale eligible cache immediately while refreshing in the background", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    const staleItem: ActivationItem = {
+      id: "directoryRole:reader:/",
+      type: "directoryRole",
+      sourceName: "Reader",
+      displayName: "Reader",
+      principalId: "principal-1",
+      scopeLabel: "Tenant",
+      status: "eligible",
+      roleDefinitionId: "reader",
+      directoryScopeId: "/"
+    };
+    const refreshedItem: ActivationItem = {
+      ...staleItem,
+      id: "directoryRole:admin:/",
+      sourceName: "Admin",
+      displayName: "Admin",
+      roleDefinitionId: "admin"
+    };
+    const snapshot = deferred<{ success: true; data: { eligible: { items: ActivationItem[]; errors: []; diagnostics: [] }; active: { items: []; errors: []; diagnostics: [] } } }>();
+    const storageData: Record<string, unknown> = {
+      [SETTINGS_KEY]: DEFAULT_SETTINGS,
+      [DATA_CACHE_KEY]: {
+        eligibleByTarget: {
+          directoryRole: {
+            fetchedAt: Date.now() - 40 * 60 * 1000,
+            cacheKey: "graphDirectory:missing",
+            errors: [],
+            items: [staleItem]
+          }
+        },
+        activeByTarget: {
+          directoryRole: {
+            fetchedAt: Date.now(),
+            cacheKey: "graphDirectory:missing",
+            errors: [],
+            items: []
+          }
+        }
+      }
+    };
+    const sendMessage = vi.fn((message: { action: string }) => {
+      if (message.action === "getTokenStatus") {
+        return Promise.resolve({
+          success: true,
+          data: {
+            graph: { hasToken: false },
+            azureManagement: { hasToken: false }
+          }
+        });
+      }
+      if (message.action === "getActivationSnapshot") {
+        return snapshot.promise;
+      }
+      return Promise.resolve({ success: true, data: { items: [], errors: [] } });
+    });
+
+    vi.stubGlobal("chrome", {
+      runtime: { sendMessage },
+      storage: {
+        local: {
+          get: vi.fn(async (key: string) => ({ [key]: storageData[key] })),
+          set: vi.fn(async (value: Record<string, unknown>) => Object.assign(storageData, value)),
+          remove: vi.fn(async () => undefined)
+        }
+      },
+      tabs: { create: vi.fn() }
+    });
+    vi.resetModules();
+    await import("../src/popup/main");
+
+    await waitFor(() => expect(document.body.textContent).toContain("Reader"));
+    expect(document.body.textContent).not.toContain("Loading access data");
+    expect(document.body.textContent).toContain("Refreshing stale access data");
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ action: "getActivationSnapshot" }));
+
+    snapshot.resolve({
+      success: true,
+      data: {
+        eligible: { items: [refreshedItem], errors: [], diagnostics: [] },
+        active: { items: [], errors: [], diagnostics: [] }
+      }
+    });
+    await waitFor(() => expect(document.body.textContent).toContain("Admin"));
+  });
+
   test("renders filter and sort icons next to their toolbar fields", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     const eligibleItem: ActivationItem = {
@@ -422,6 +672,87 @@ describe("popup compact controls", () => {
       .map(([message]) => message)
       .filter((message) => message.action === "getActivationItems" || message.action === "getActiveItems");
     expect(fetchMessages.map((message) => message.targets)).toEqual([["azureRole"], ["azureRole"]]);
+  });
+
+  test("manual popup refresh targets the current role tab through the snapshot endpoint", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    const eligibleItem: ActivationItem = {
+      id: "directoryRole:reader:/",
+      type: "directoryRole",
+      sourceName: "Reader",
+      displayName: "Reader",
+      principalId: "principal-1",
+      scopeLabel: "Tenant",
+      status: "eligible",
+      roleDefinitionId: "reader",
+      directoryScopeId: "/"
+    };
+    const storageData: Record<string, unknown> = {
+      [SETTINGS_KEY]: DEFAULT_SETTINGS,
+      [DATA_CACHE_KEY]: {
+        eligibleByTarget: {
+          directoryRole: {
+            fetchedAt: Date.now(),
+            cacheKey: "graphDirectory:missing",
+            errors: [],
+            items: [eligibleItem]
+          }
+        },
+        activeByTarget: {
+          directoryRole: {
+            fetchedAt: Date.now(),
+            cacheKey: "graphDirectory:missing",
+            errors: [],
+            items: []
+          }
+        }
+      }
+    };
+    const sendMessage = vi.fn((message: { action: string; targets?: string[] }) => {
+      if (message.action === "getTokenStatus") {
+        return Promise.resolve({
+          success: true,
+          data: {
+            graph: { hasToken: false },
+            azureManagement: { hasToken: false }
+          }
+        });
+      }
+      if (message.action === "getActivationSnapshot") {
+        return Promise.resolve({
+          success: true,
+          data: {
+            eligible: { items: [eligibleItem], errors: [], diagnostics: [] },
+            active: { items: [], errors: [], diagnostics: [] }
+          }
+        });
+      }
+      return Promise.resolve({ success: true, data: { items: [], errors: [] } });
+    });
+
+    vi.stubGlobal("chrome", {
+      runtime: { sendMessage },
+      storage: {
+        local: {
+          get: vi.fn(async (key: string) => ({ [key]: storageData[key] })),
+          set: vi.fn(async (value: Record<string, unknown>) => Object.assign(storageData, value)),
+          remove: vi.fn(async () => undefined)
+        }
+      },
+      tabs: { create: vi.fn() }
+    });
+    vi.resetModules();
+    await import("../src/popup/main");
+
+    await waitFor(() => expect(document.body.textContent).toContain("Reader"));
+    document.querySelector<HTMLButtonElement>('button[aria-label="Refresh Entra Roles data"]')?.click();
+
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+        action: "getActivationSnapshot",
+        targets: ["directoryRole"]
+      }))
+    );
   });
 
   test("hides popup tabs for disabled features", async () => {
@@ -908,7 +1239,7 @@ describe("popup compact controls", () => {
     refreshedEligible.resolve({ success: true, data: { items: [], errors: [] } });
     refreshedActive.resolve({ success: true, data: { items: [{ ...eligibleItem, status: "active" }], errors: [] } });
 
-    await waitFor(() => expect(document.body.textContent).toContain("Activation confirmed for 1 item."));
+    await waitFor(() => expect(document.body.textContent).toContain("Activation request submitted for 1 item."));
     expect(document.body.textContent).not.toContain("Forced refresh completed.");
   });
 
@@ -1609,6 +1940,15 @@ describe("popup role row styling", () => {
     expect(headerActionsRule).toContain("justify-content: flex-end;");
     expect(toolbarRule).toContain("grid-template-columns: minmax(0, 1fr) 150px;");
     expect(activationButtonRule).toContain("margin-top: 10px;");
+  });
+
+  test("keeps activation progress visible near the top while the popup scrolls", () => {
+    const css = readFileSync(join(process.cwd(), "src/styles.css"), "utf8");
+    const progressRule = css.match(/\.activation-progress-panel\s*\{[^}]+\}/)?.[0] || "";
+
+    expect(progressRule).toContain("position: sticky;");
+    expect(progressRule).toContain("top: 0;");
+    expect(progressRule).toContain("z-index: 20;");
   });
 
   test("adds icon padding inside toolbar fields", () => {

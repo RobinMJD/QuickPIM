@@ -5,6 +5,7 @@ export type QuickPimMessage =
   | { action: "clearToken" }
   | { action: "getActivationItems"; targets?: AccessSetupTarget[] }
   | { action: "getActiveItems"; targets?: AccessSetupTarget[] }
+  | { action: "getActivationSnapshot"; targets?: AccessSetupTarget[] }
   | { action: "capturePortalTokens"; tokens: string[]; source?: string }
   | {
       action: "activateItems";
@@ -15,7 +16,7 @@ export type QuickPimMessage =
     };
 
 const SIMPLE_ACTIONS = new Set(["getTokenStatus", "clearToken"]);
-const TARGETED_FETCH_ACTIONS = new Set(["getActivationItems", "getActiveItems"]);
+const TARGETED_FETCH_ACTIONS = new Set(["getActivationItems", "getActiveItems", "getActivationSnapshot"]);
 const MAX_PORTAL_TOKENS = 20;
 const MAX_PORTAL_TOKEN_LENGTH = 8192;
 const MAX_PORTAL_SOURCE_LENGTH = 160;

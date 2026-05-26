@@ -86,6 +86,21 @@ export function buildTokenCacheKey(tokenStatus: TokenStatus | null | undefined):
   return parts.join("|");
 }
 
+export function buildTargetCacheKey(tokenStatus: TokenStatus | null | undefined, target: AccessSetupTarget): string {
+  if (target === "azureRole") {
+    return buildTokenCachePart("azure", tokenStatus?.azureManagement);
+  }
+  const graphToken = tokenStatus?.graphTargets?.[target] || tokenStatus?.graph;
+  return buildTokenCachePart(target === "directoryRole" ? "graphDirectory" : "graphPimGroup", graphToken);
+}
+
+export function buildTargetCacheKeys(
+  tokenStatus: TokenStatus | null | undefined,
+  targets: AccessSetupTarget[]
+): Partial<Record<AccessSetupTarget, string>> {
+  return Object.fromEntries(targets.map((target) => [target, buildTargetCacheKey(tokenStatus, target)]));
+}
+
 export function hasRequiredPortalToken(target: AccessSetupTarget, tokenStatus: TokenStatus): boolean {
   const token = getTokenStatusForTarget(target, tokenStatus);
   if (!token?.hasToken || token.isExpired) {
@@ -233,12 +248,22 @@ function hasKnownScopes(token: TokenStatusEntry): boolean {
 }
 
 function collectDiagnostics(cache: QuickPimDataCache | undefined): AccessDiagnostic[] {
-  return [cache?.eligible, cache?.active].flatMap((entry) => entry?.diagnostics || []);
+  return [
+    cache?.eligible,
+    cache?.active,
+    ...Object.values(cache?.eligibleByTarget || {}),
+    ...Object.values(cache?.activeByTarget || {})
+  ].flatMap((entry) => entry?.diagnostics || []);
 }
 
 function collectLoadedTargets(cache: QuickPimDataCache | undefined): Set<AccessSetupTarget> {
   return new Set(
-    [cache?.eligible, cache?.active]
+    [
+      cache?.eligible,
+      cache?.active,
+      ...Object.values(cache?.eligibleByTarget || {}),
+      ...Object.values(cache?.activeByTarget || {})
+    ]
       .flatMap((entry) => entry?.items || [])
       .map((item) => item.type)
   );

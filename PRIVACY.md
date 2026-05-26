@@ -61,4 +61,4 @@ You can also remove all local extension data by uninstalling QuickPIM++ from the
 
 For issues or questions, use the QuickPIM++ GitHub repository:
 
-https://github.com/RobinMJD/QuickPIM
+https://github.com/RobinMJD/QuickPIM-PlusPlus

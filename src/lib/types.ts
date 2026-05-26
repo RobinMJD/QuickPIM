@@ -1,5 +1,5 @@
 export type ActivationItemType = "directoryRole" | "azureRole" | "pimGroup";
-export type ActivationStatus = "eligible" | "active";
+export type ActivationStatus = "eligible" | "active" | "pendingApproval";
 export type SortMode = "name" | "lastUsed" | "activationCount" | "type" | "scope";
 export type RoleTab = ActivationItemType;
 export type PopupTab = RoleTab | "bundles";
@@ -31,6 +31,7 @@ export interface BaseActivationItem {
   activationRequirements?: {
     justification?: boolean;
     ticket?: boolean;
+    approval?: boolean;
     maxDurationHours?: number;
   };
   raw?: unknown;
@@ -97,9 +98,13 @@ export interface CachedActivationEntry {
   diagnostics?: AccessDiagnostic[];
 }
 
+export type TargetActivationCache = Partial<Record<AccessSetupTarget, CachedActivationEntry>>;
+
 export interface QuickPimDataCache {
   eligible?: CachedActivationEntry;
   active?: CachedActivationEntry;
+  eligibleByTarget?: TargetActivationCache;
+  activeByTarget?: TargetActivationCache;
 }
 
 export interface AccessDiagnostic {
@@ -152,6 +157,19 @@ export interface TokenStatus {
   graph: TokenStatusEntry;
   graphTargets?: Partial<Record<Exclude<AccessSetupTarget, "azureRole">, TokenStatusEntry>>;
   azureManagement: TokenStatusEntry;
+}
+
+export interface ActivationDataResult {
+  items: ActivationItem[];
+  errors: string[];
+  diagnostics?: AccessDiagnostic[];
+}
+
+export interface ActivationSnapshot {
+  eligible: ActivationDataResult;
+  active: ActivationDataResult;
+  eligibleByTarget?: Partial<Record<AccessSetupTarget, ActivationDataResult>>;
+  activeByTarget?: Partial<Record<AccessSetupTarget, ActivationDataResult>>;
 }
 
 export interface ActivationRequest {
@@ -224,6 +242,9 @@ export interface RoleManagementPolicyRuleApi {
   };
   setting?: {
     isRequestorJustificationRequired?: boolean;
+    isApprovalRequired?: boolean;
+    approvalMode?: string;
+    approvalStages?: unknown[];
   };
 }
 
@@ -280,6 +301,8 @@ export interface PimGroupApi {
   groupId?: string;
   principalId?: string;
   accessId?: "member" | "owner";
+  action?: string;
+  status?: string;
   memberType?: string;
   endDateTime?: string;
   scheduleInfo?: {

@@ -1,8 +1,19 @@
-import type { CachedActivationEntry, QuickPimDataCache } from "./types";
+import type { AccessSetupTarget, ActivationDataResult, CachedActivationEntry, QuickPimDataCache, TargetActivationCache } from "./types";
 
 export const DATA_CACHE_KEY = "quickPimDataCache.v1";
-export const DEFAULT_ELIGIBLE_CACHE_TTL_MS = 10 * 60 * 1000;
+export const DEFAULT_ELIGIBLE_CACHE_TTL_MS = 30 * 60 * 1000;
 export const DEFAULT_ACTIVE_CACHE_TTL_MS = 10 * 60 * 1000;
+export const STALE_ELIGIBLE_CACHE_TTL_MS = 60 * 60 * 1000;
+export const CACHE_TARGETS: AccessSetupTarget[] = ["directoryRole", "pimGroup", "azureRole"];
+
+type CacheBucket = "eligible" | "active";
+
+export interface TargetCacheStatus {
+  target: AccessSetupTarget;
+  entry?: CachedActivationEntry;
+  isFresh: boolean;
+  isUsable: boolean;
+}
 
 export function isCacheEntryFresh(
   entry: CachedActivationEntry | undefined,
@@ -45,7 +56,7 @@ export async function clearDataCache(): Promise<void> {
 }
 
 export async function getDataWithCache(
-  key: keyof QuickPimDataCache,
+  key: CacheBucket,
   cache: QuickPimDataCache,
   ttlMs: number,
   force: boolean,
@@ -129,6 +140,123 @@ export async function getActivationDataWithCache(options: {
   };
 }
 
+export function getTargetCacheStatus(options: {
+  cache: QuickPimDataCache;
+  bucket: CacheBucket;
+  target: AccessSetupTarget;
+  cacheKey?: string;
+  legacyCacheKey?: string;
+  now?: number;
+  freshTtlMs: number;
+  usableTtlMs?: number;
+}): TargetCacheStatus {
+  const now = options.now ?? Date.now();
+  const usableTtlMs = options.usableTtlMs ?? options.freshTtlMs;
+  const entry = getTargetEntry(options.cache, options.bucket, options.target);
+  if (isCacheEntryFresh(entry, usableTtlMs, now, options.cacheKey)) {
+    return {
+      target: options.target,
+      entry: markDiagnosticsFromCache({ ...entry, errors: [] }, true),
+      isFresh: isCacheEntryFresh(entry, options.freshTtlMs, now, options.cacheKey),
+      isUsable: true
+    };
+  }
+
+  const legacyEntry = getLegacyTargetEntry(options.cache, options.bucket, options.target);
+  if (isCacheEntryFresh(legacyEntry, usableTtlMs, now, options.legacyCacheKey)) {
+    return {
+      target: options.target,
+      entry: markDiagnosticsFromCache({ ...legacyEntry, errors: [] }, true),
+      isFresh: isCacheEntryFresh(legacyEntry, options.freshTtlMs, now, options.legacyCacheKey),
+      isUsable: true
+    };
+  }
+
+  return { target: options.target, isFresh: false, isUsable: false };
+}
+
+export function mergeTargetEntries(entries: Array<CachedActivationEntry | undefined>, fetchedAt = Date.now(), cacheKey?: string): CachedActivationEntry {
+  const present = entries.filter((entry): entry is CachedActivationEntry => Boolean(entry));
+  return {
+    items: dedupeItems(present.flatMap((entry) => entry.items)),
+    errors: present.flatMap((entry) => entry.errors || []),
+    diagnostics: present.flatMap((entry) => entry.diagnostics || []),
+    fetchedAt: present.length ? Math.max(...present.map((entry) => entry.fetchedAt)) : fetchedAt,
+    cacheKey
+  };
+}
+
+export function getTargetEntriesFromCache(
+  cache: QuickPimDataCache,
+  bucket: CacheBucket,
+  targets: AccessSetupTarget[],
+  cacheKeys: Partial<Record<AccessSetupTarget, string>>,
+  options: { legacyCacheKey?: string; now?: number; freshTtlMs: number; usableTtlMs?: number }
+): Partial<Record<AccessSetupTarget, TargetCacheStatus>> {
+  return Object.fromEntries(
+    targets.map((target) => [
+      target,
+      getTargetCacheStatus({
+        cache,
+        bucket,
+        target,
+        cacheKey: cacheKeys[target],
+        legacyCacheKey: options.legacyCacheKey,
+        now: options.now,
+        freshTtlMs: options.freshTtlMs,
+        usableTtlMs: options.usableTtlMs
+      })
+    ])
+  );
+}
+
+export function updateCacheFromTargetResults(
+  cache: QuickPimDataCache,
+  bucket: CacheBucket,
+  targets: AccessSetupTarget[],
+  resultsByTarget: Partial<Record<AccessSetupTarget, ActivationDataResult>>,
+  fetchedAt: number,
+  cacheKeys: Partial<Record<AccessSetupTarget, string>>
+): QuickPimDataCache {
+  const mapKey = bucket === "eligible" ? "eligibleByTarget" : "activeByTarget";
+  const nextByTarget: TargetActivationCache = { ...(cache[mapKey] || {}) };
+
+  for (const target of targets) {
+    const result = resultsByTarget[target];
+    if (!result) {
+      continue;
+    }
+    nextByTarget[target] = {
+      items: result.items.filter((item) => item.type === target),
+      errors: result.errors || [],
+      diagnostics: result.diagnostics,
+      fetchedAt,
+      cacheKey: cacheKeys[target]
+    };
+  }
+
+  return {
+    ...cache,
+    [mapKey]: nextByTarget
+  };
+}
+
+export function splitActivationResultByTarget(
+  result: ActivationDataResult,
+  targets: AccessSetupTarget[]
+): Partial<Record<AccessSetupTarget, ActivationDataResult>> {
+  return Object.fromEntries(
+    targets.map((target) => [
+      target,
+      {
+        items: result.items.filter((item) => item.type === target),
+        errors: result.errors || [],
+        diagnostics: result.diagnostics?.filter((item) => item.target === target)
+      }
+    ])
+  );
+}
+
 function markDiagnosticsFromCache(entry: CachedActivationEntry, fromCache: boolean): CachedActivationEntry {
   return {
     ...entry,
@@ -141,4 +269,26 @@ function markDiagnostics(
   fromCache: boolean
 ): CachedActivationEntry["diagnostics"] | undefined {
   return diagnostics?.map((item) => ({ ...item, fromCache }));
+}
+
+function getTargetEntry(cache: QuickPimDataCache, bucket: CacheBucket, target: AccessSetupTarget): CachedActivationEntry | undefined {
+  const byTarget = bucket === "eligible" ? cache.eligibleByTarget : cache.activeByTarget;
+  return byTarget?.[target];
+}
+
+function getLegacyTargetEntry(cache: QuickPimDataCache, bucket: CacheBucket, target: AccessSetupTarget): CachedActivationEntry | undefined {
+  const legacy = bucket === "eligible" ? cache.eligible : cache.active;
+  if (!legacy) {
+    return undefined;
+  }
+  return {
+    ...legacy,
+    items: legacy.items.filter((item) => item.type === target),
+    errors: [],
+    diagnostics: legacy.diagnostics?.filter((item) => item.target === target)
+  };
+}
+
+function dedupeItems(items: CachedActivationEntry["items"]): CachedActivationEntry["items"] {
+  return [...new Map(items.map((item) => [item.id, item])).values()];
 }
